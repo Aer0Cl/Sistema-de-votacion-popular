@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start-dev": "vite",
+    "check:aws": "bash ./scripts/check-aws.sh",
     "build": "vue-tsc -b && vite build",
     "check": "vue-tsc -b --noEmit",
     "lint": "eslint .",

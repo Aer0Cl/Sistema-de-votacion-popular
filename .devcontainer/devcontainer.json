@@ -1,0 +1,29 @@
+{
+  "name": "Sistema-de-votacion-popular",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "settings": {
+    "terminal.integrated.shell.linux": "/bin/bash",
+    "npm.packageManager": "npm",
+    "editor.formatOnSave": true,
+    "eslint.validate": ["javascript", "typescript", "vue"],
+    "volar.takeOverMode.enabled": true
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker",
+        "Vue.volar"
+      ]
+    }
+  },
+  "containerEnv": {
+    "PATH": "/home/vscode/.local/bin:${PATH}"
+  },
+  "postCreateCommand": "npm install && python3 -m pip install --user awscli && echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.profile && echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && (npm run check:aws || echo 'AWS check failed — revisa docs/aws-codespaces-credentials.md')",
+  "forwardPorts": [5173],
+  "remoteUser": "vscode"
+}
