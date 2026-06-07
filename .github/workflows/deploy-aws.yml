@@ -3,8 +3,18 @@ name: Deploy Vue app to AWS
 on:
   push:
     branches:
-      - main
+      - feature/*
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
 
 permissions:
   id-token: write
@@ -12,12 +22,15 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  STACK_NAME: vue-ts-webapp
-  PROJECT_NAME: vue-ts-app
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+      STACK_NAME: ${{ format('vue-ts-webapp-{0}', github.event.inputs.environment || 'dev') }}
+      PROJECT_NAME: ${{ format('vue-ts-app-{0}', github.event.inputs.environment || 'dev') }}
 
     steps:
       - name: Checkout
@@ -38,7 +51,9 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          # Select role-to-assume based on dispatched environment (expects secrets:
+          # AWS_ROLE_TO_ASSUME_DEV, AWS_ROLE_TO_ASSUME_QA, AWS_ROLE_TO_ASSUME_PROD)
+          role-to-assume: ${{ github.event.inputs.environment == 'dev' && secrets.AWS_ROLE_TO_ASSUME_DEV || github.event.inputs.environment == 'qa' && secrets.AWS_ROLE_TO_ASSUME_QA || secrets.AWS_ROLE_TO_ASSUME_PROD }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy infrastructure
@@ -46,7 +61,7 @@ jobs:
           aws cloudformation deploy \
             --stack-name "$STACK_NAME" \
             --template-file infra/cloudformation/static-site.yaml \
-            --parameter-overrides ProjectName="$PROJECT_NAME" \
+              --parameter-overrides ProjectName="$PROJECT_NAME" \
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$AWS_REGION"
 
