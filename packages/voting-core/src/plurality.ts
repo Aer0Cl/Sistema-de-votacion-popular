@@ -29,7 +29,9 @@ export function tallyPlurality(
 
   const maxVotes = Math.max(0, ...Object.values(tally))
   const winners =
-    maxVotes === 0 ? [] : Object.keys(tally).filter((nominee) => tally[nominee] === maxVotes)
+    maxVotes === 0
+      ? []
+      : Object.keys(tally).filter((nominee) => tally[nominee] === maxVotes)
 
   return { totalBallots: ballots.length, invalidBallots, tally, winners }
 }

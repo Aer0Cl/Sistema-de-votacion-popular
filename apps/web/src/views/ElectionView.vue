@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { Answer, AnswerChoice } from '@votacion/voting-core'
 import { api } from '@/api'
 import type { ElectionDetail } from '@/api'
@@ -10,6 +11,7 @@ import { errorMessage, formatDateTime } from '@/utils/format'
 
 const props = defineProps<{ code: string }>()
 
+const router = useRouter()
 const elections = useElectionsStore()
 const answers = useAnswersStore()
 
@@ -17,6 +19,8 @@ const election = ref<ElectionDetail | null>(null)
 const loadError = ref('')
 const savingCategory = ref<string | null>(null)
 const saveErrors = reactive<Record<string, string>>({})
+const leaving = ref(false)
+const leaveError = ref('')
 
 async function load() {
   loadError.value = ''
@@ -69,8 +73,34 @@ async function save(categoryId: string, choice: AnswerChoice) {
   }
 }
 
+async function leave() {
+  if (
+    !election.value ||
+    !window.confirm(
+      `¿Abandonar "${election.value.name}"? Tus respuestas se conservan para tus otras votaciones, pero dejarán de contar en esta.`,
+    )
+  ) {
+    return
+  }
+  leaving.value = true
+  leaveError.value = ''
+  try {
+    const stillVisible = await elections.leave(props.code)
+    if (stillVisible) {
+      await load()
+    } else {
+      await router.push({ name: 'home' })
+    }
+  } catch (error) {
+    leaveError.value = errorMessage(error)
+  } finally {
+    leaving.value = false
+  }
+}
+
 const answered = computed(
-  () => election.value?.categories.filter((category) => answerFor(category.id)).length ?? 0,
+  () =>
+    election.value?.categories.filter((category) => answerFor(category.id)).length ?? 0,
 )
 </script>
 
@@ -94,13 +124,25 @@ const answered = computed(
           {{ isOpen ? 'Respondiste' : 'Quedaron registradas' }} {{ answered }} de
           {{ election.categories.length }} categorías.
         </p>
-        <RouterLink
-          v-if="election.isAdmin"
-          :to="{ name: 'results', params: { code: election.code } }"
-          class="btn"
-        >
-          Ver resultados
-        </RouterLink>
+        <div class="actions">
+          <RouterLink
+            v-if="election.isAdmin"
+            :to="{ name: 'results', params: { code: election.code } }"
+            class="btn"
+          >
+            Ver resultados
+          </RouterLink>
+          <button
+            v-if="election.isMember && isOpen"
+            class="btn btn-secondary"
+            type="button"
+            :disabled="leaving"
+            @click="leave"
+          >
+            Abandonar votación
+          </button>
+        </div>
+        <p v-if="leaveError" class="error">{{ leaveError }}</p>
       </section>
 
       <p v-if="!election.isMember" class="muted">
@@ -127,3 +169,11 @@ const answered = computed(
     </template>
   </main>
 </template>
+
+<style scoped>
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+</style>

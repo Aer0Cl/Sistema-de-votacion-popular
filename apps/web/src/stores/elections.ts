@@ -28,6 +28,15 @@ export const useElectionsStore = defineStore('elections', {
       this.upsert(election)
       return election
     },
+    async leave(code: string) {
+      const election = await api.leaveElection(code)
+      if (election) {
+        this.upsert(election)
+      } else {
+        this.items = this.items.filter((item) => item.code !== code)
+      }
+      return election
+    },
     upsert(election: ElectionSummary) {
       const index = this.items.findIndex((item) => item.code === election.code)
       if (index === -1) {

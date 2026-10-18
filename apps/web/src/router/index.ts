@@ -22,6 +22,12 @@ const router = createRouter({
       meta: { requiresAdmin: true },
     },
     {
+      path: '/admin/catalogo',
+      name: 'catalog',
+      component: () => import('@views/CatalogView.vue'),
+      meta: { requiresAdmin: true },
+    },
+    {
       path: '/votaciones/:code',
       name: 'election',
       component: () => import('@views/ElectionView.vue'),

@@ -1,8 +1,21 @@
-import type { Answer, AnswerChoice, Category, Election, ElectionStatus, Nominee } from './types'
+import type {
+  Answer,
+  AnswerChoice,
+  Category,
+  Election,
+  ElectionStatus,
+  Nominee,
+} from './types'
 
 export const ELECTION_CODE_PATTERN = /^[A-Z0-9]{6,8}$/
 export const MIN_CATEGORIES = 2
 export const MAX_CATEGORIES = 24
+// minimo de nominados para que una categoria se pueda usar en una votacion
+export const MIN_NOMINEES = 2
+
+// MVP: los rankings deben ordenar a todos los nominados. Cuando se permitan rankings
+// parciales basta con cambiar este valor (el conteo ya maneja papeletas agotadas).
+export const REQUIRE_COMPLETE_RANKING = true
 
 // Los codigos se comparan sin distinguir mayusculas
 export function normalizeElectionCode(code: string): string {
@@ -29,6 +42,7 @@ export type NewElectionInput = {
 export function validateNewElection(
   input: NewElectionInput,
   catalog: readonly Category[],
+  nominees: readonly Nominee[],
   now: Date,
 ): string[] {
   const errors: string[] = []
@@ -54,6 +68,19 @@ export function validateNewElection(
     errors.push('Hay categorias que no existen en el catalogo.')
   }
 
+  const withoutNominees = catalog.filter(
+    (category) =>
+      categoryIds.has(category.id) &&
+      nominees.filter((nominee) => nominee.categoryId === category.id).length <
+        MIN_NOMINEES,
+  )
+  if (withoutNominees.length > 0) {
+    const names = withoutNominees.map((category) => category.name).join(', ')
+    errors.push(
+      `Estas categorias necesitan al menos ${MIN_NOMINEES} nominados: ${names}.`,
+    )
+  }
+
   return errors
 }
 
@@ -62,7 +89,10 @@ export function validateAnswerChoice(
   category: Category,
   nominees: readonly Nominee[],
   choice: AnswerChoice,
+  options: { requireCompleteRanking?: boolean } = {},
 ): string | null {
+  const requireCompleteRanking =
+    options.requireCompleteRanking ?? REQUIRE_COMPLETE_RANKING
   const ids = new Set(
     nominees.filter((nominee) => nominee.categoryId === category.id).map((n) => n.id),
   )
@@ -85,6 +115,9 @@ export function validateAnswerChoice(
   }
   if (choice.ranking.some((id) => !ids.has(id))) {
     return 'El ranking incluye nominados que no pertenecen a la categoria.'
+  }
+  if (requireCompleteRanking && choice.ranking.length !== ids.size) {
+    return 'El ranking debe ordenar a todos los nominados.'
   }
   return null
 }

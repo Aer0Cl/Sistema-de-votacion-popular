@@ -30,6 +30,20 @@ El metodo de cada categoria lo define el backend y llega junto con la categoria.
 7. No se puede unir a una votacion cerrada.
 8. **Resultados:** visibles solo para los administradores de la votacion (parciales mientras esta
    abierta, definitivos desde la foto de cierre).
+9. **Catalogo:** los administradores crean, editan y eliminan categorias, y crean y editan
+   nominados. **Los nominados no se eliminan.** Editar nombres (de categorias y nominados) se
+   permite siempre. Mientras la categoria no se use en ninguna votacion (abierta o cerrada) tambien
+   se puede cambiar su metodo, agregarle nominados o eliminarla (con sus nominados); una vez en uso
+   eso queda bloqueado, porque cambiaria respuestas guardadas. Una categoria necesita al menos 2
+   nominados para elegirse en una votacion.
+10. **Abandonar:** un participante puede abandonar una votacion abierta. Sus respuestas se
+    conservan (son compartidas con sus otras votaciones) pero dejan de contar en esa. Puede volver
+    a unirse mientras siga abierta. Un administrador que abandona sigue viendola como admin.
+11. **Ranking completo:** en categorias de ranking hay que ordenar a todos los nominados. No hay
+    rankings parciales por ahora; la regla esta en `REQUIRE_COMPLETE_RANKING` (`voting-core`) por si
+    se habilitan en el futuro (el conteo ya maneja papeletas agotadas).
+12. **Usuarios:** su creacion y autenticacion quedan a cargo de los servicios de AWS (Cognito); se
+    definira mas adelante. Mientras tanto el front usa un selector de usuario de prueba.
 
 ### Ejemplo del cierre
 
@@ -119,8 +133,14 @@ y la API real debe respetarlo. Todas las rutas requieren JWT; prefijo `/api/v1`.
 | GET | `/elections/{code}/preview` | todos | Nombre, cierre y cantidad de categorias, antes de unirse |
 | POST | `/elections/{code}/join` | todos | Unirse (409 si esta cerrada) |
 | GET | `/elections/{code}` | participantes y admins | Detalle con categorias, metodo y nominados; mis respuestas (actuales si esta abierta, de la foto si esta cerrada) |
-| GET | `/categories` | admins | Catalogo para crear votaciones |
+| DELETE | `/elections/{code}/membership` | participantes | Abandonar (409 si esta cerrada) |
 | POST | `/elections` | admins | Crear votacion; el servidor genera el codigo |
+| GET | `/admin/catalog` | admins | Categorias con nominados, cantidad de votaciones que las usan y si estan bloqueadas |
+| POST | `/admin/categories` | admins | Crear categoria `{ name, votingMethod }` |
+| PATCH | `/admin/categories/{id}` | admins | Editar nombre y metodo (cambiar el metodo da 409 si esta en uso) |
+| DELETE | `/admin/categories/{id}` | admins | Eliminar con sus nominados (409 si esta en uso) |
+| POST | `/admin/categories/{id}/nominees` | admins | Agregar nominado (409 si la categoria esta en uso) |
+| PATCH | `/admin/nominees/{id}` | admins | Editar nombre / descripcion (los nominados no se eliminan) |
 | GET | `/me/answers` | todos | Mis respuestas actuales |
 | PUT | `/me/answers/{categoryId}` | todos | Guardar respuesta: `{ "nomineeId" }` o `{ "ranking": [...] }` |
 | GET | `/elections/{code}/results` | admins de la votacion | Resultados parciales o de la foto de cierre |
@@ -174,10 +194,12 @@ Workspaces, Vitest, README, CI con lint/check/test.
 - Votos secretos: ningun endpoint expone respuestas individuales de otros usuarios.
 - Throttling y log de auditoria.
 
+### Fase 1c — Catalogo y abandonar votacion — hecha
+- Vista `/admin/catalogo` para crear, editar y eliminar categorias y crear y editar nominados
+  (reglas 9 y 11).
+- Boton "Abandonar votacion" (regla 10).
+
 ## 9. Decisiones pendientes
 
 1. **Administradores adicionales:** ¿puede el creador agregar otros administradores a su votacion?
-2. **Carga de nominados:** ¿quien los mantiene (seed, panel de administracion)?
-3. **Salir de una votacion** abierta: ¿se permite?
-4. **Ranking parcial:** hoy la UI envia siempre el orden completo; el backend acepta rankings de al
-   menos un nominado.
+2. **Usuarios con Cognito:** registro (abierto o por invitacion), como se asigna el rol `admin`.

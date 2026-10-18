@@ -11,7 +11,9 @@ export const useAnswersStore = defineStore('answers', {
   actions: {
     async load() {
       const answers = await api.getMyAnswers()
-      this.byCategory = Object.fromEntries(answers.map((answer) => [answer.categoryId, answer]))
+      this.byCategory = Object.fromEntries(
+        answers.map((answer) => [answer.categoryId, answer]),
+      )
       this.loaded = true
     },
     async save(categoryId: string, choice: AnswerChoice) {

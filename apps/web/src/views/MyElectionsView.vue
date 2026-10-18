@@ -117,8 +117,17 @@ async function join() {
 
       <article v-if="session.isAdmin" class="card">
         <h2>Administración</h2>
-        <p class="muted">Crea una votación y comparte su identificador con los participantes.</p>
-        <RouterLink :to="{ name: 'create-election' }" class="btn">Crear votación</RouterLink>
+        <p class="muted">
+          Crea una votación y comparte su identificador con los participantes.
+        </p>
+        <div class="admin-actions">
+          <RouterLink :to="{ name: 'create-election' }" class="btn"
+            >Crear votación</RouterLink
+          >
+          <RouterLink :to="{ name: 'catalog' }" class="btn btn-secondary">
+            Categorías y nominados
+          </RouterLink>
+        </div>
       </article>
     </section>
 
@@ -135,7 +144,10 @@ async function join() {
         class="card election-card"
       >
         <div class="badges">
-          <span class="badge" :class="election.status === 'open' ? 'badge-open' : 'badge-closed'">
+          <span
+            class="badge"
+            :class="election.status === 'open' ? 'badge-open' : 'badge-closed'"
+          >
             {{ election.status === 'open' ? 'Abierta' : 'Cerrada' }}
           </span>
           <span v-if="election.isAdmin" class="badge">Administras</span>
@@ -168,6 +180,12 @@ async function join() {
   color: inherit;
   text-decoration: none;
   margin-top: 1rem;
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .badges {

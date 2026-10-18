@@ -146,4 +146,178 @@ describe('mockApi', () => {
     expect(created.code).toMatch(/^[A-Z0-9]{8}$/)
     expect(created.isAdmin).toBe(true)
   })
+
+  it('exige ordenar a todos los nominados en ranking', async () => {
+    const { api } = setup()
+    await api.joinElection('AAAAAA')
+
+    await expect(
+      api.saveAnswer('pelicula', { ranking: ['p1', 'p2'] }),
+    ).rejects.toMatchObject({
+      status: 400,
+    })
+  })
+
+  describe('abandonar una votacion', () => {
+    it('deja de contar sus respuestas ahi pero las conserva para las demas', async () => {
+      const { api } = setup()
+      await api.joinElection('AAAAAA')
+      await api.joinElection('BBBBBB')
+      await api.saveAnswer('pelicula', { ranking: ['p1', 'p2', 'p3'] })
+
+      expect(await api.leaveElection('AAAAAA')).toBeNull()
+
+      expect((await api.listMyElections()).map((election) => election.code)).toEqual([
+        'BBBBBB',
+      ])
+      expect((await api.getElection('BBBBBB')).myAnswers).toHaveLength(1)
+      api.setUser('admin')
+      expect((await api.getResults('AAAAAA')).results[0].result.totalBallots).toBe(0)
+    })
+
+    it('al quedar sin votaciones abiertas con la categoria ya no puede responderla', async () => {
+      const { api } = setup()
+      await api.joinElection('AAAAAA')
+      await api.leaveElection('AAAAAA')
+
+      await expect(api.saveAnswer('actor', { nomineeId: 'a1' })).rejects.toMatchObject({
+        status: 403,
+      })
+    })
+
+    it('no permite abandonar una votacion cerrada', async () => {
+      const { api, advance } = setup()
+      await api.joinElection('AAAAAA')
+      advance(15)
+
+      await expect(api.leaveElection('AAAAAA')).rejects.toMatchObject({ status: 409 })
+    })
+
+    it('el administrador sigue viendo la votacion despues de abandonarla', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+      await api.joinElection('AAAAAA')
+
+      const election = await api.leaveElection('AAAAAA')
+
+      expect(election).toMatchObject({ isMember: false, isAdmin: true })
+    })
+  })
+
+  describe('catalogo', () => {
+    it('solo los administradores lo gestionan', async () => {
+      const { api } = setup()
+
+      await expect(api.listCatalog()).rejects.toMatchObject({ status: 403 })
+      await expect(
+        api.createCategory({ name: 'Mejor sonido', votingMethod: 'plurality' }),
+      ).rejects.toMatchObject({ status: 403 })
+    })
+
+    it('crea categorias y nominados, que quedan disponibles para nuevas votaciones', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+
+      const created = await api.createCategory({
+        name: 'Mejor sonido',
+        votingMethod: 'plurality',
+      })
+      expect(created).toMatchObject({ id: 'mejor-sonido', locked: false, nominees: [] })
+
+      await api.addNominee(created.id, { name: 'Dune' })
+      const updated = await api.addNominee(created.id, {
+        name: 'Oppenheimer',
+        description: '2023',
+      })
+      expect(updated.nominees.map((nominee) => nominee.name)).toEqual([
+        'Dune',
+        'Oppenheimer',
+      ])
+
+      const election = await api.createElection({
+        name: 'Con sonido',
+        closesAt: new Date(start.getTime() + DAY).toISOString(),
+        categoryIds: ['actor', 'mejor-sonido'],
+      })
+      expect(election.categoryIds).toContain('mejor-sonido')
+    })
+
+    it('no permite crear votaciones con categorias de menos de 2 nominados', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+      const created = await api.createCategory({
+        name: 'Mejor sonido',
+        votingMethod: 'plurality',
+      })
+      await api.addNominee(created.id, { name: 'Dune' })
+
+      await expect(
+        api.createElection({
+          name: 'X',
+          closesAt: new Date(start.getTime() + DAY).toISOString(),
+          categoryIds: ['actor', created.id],
+        }),
+      ).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('en categorias usadas solo permite editar nombres', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+
+      const actor = (await api.listCatalog()).find((category) => category.id === 'actor')
+      expect(actor).toMatchObject({ locked: true, usedInElections: 1 })
+
+      await expect(api.addNominee('actor', { name: 'a3' })).rejects.toMatchObject({
+        status: 409,
+      })
+      await expect(
+        api.updateCategory('actor', { name: 'Mejor actor', votingMethod: 'ranked' }),
+      ).rejects.toMatchObject({ status: 409 })
+      await expect(api.deleteCategory('actor')).rejects.toMatchObject({ status: 409 })
+
+      const renamed = await api.updateNominee('a1', { name: 'Actor uno' })
+      expect(renamed.nominees[0].name).toBe('Actor uno')
+      const updated = await api.updateCategory('actor', {
+        name: 'Mejor actor protagonico',
+        votingMethod: 'plurality',
+      })
+      expect(updated.name).toBe('Mejor actor protagonico')
+    })
+
+    it('en categorias sin uso permite cambiar el metodo y eliminarlas con sus nominados', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+      const created = await api.createCategory({
+        name: 'Mejor sonido',
+        votingMethod: 'plurality',
+      })
+      await api.addNominee(created.id, { name: 'Dune' })
+
+      const updated = await api.updateCategory(created.id, {
+        name: 'Mejor sonido',
+        votingMethod: 'ranked',
+      })
+      expect(updated.votingMethod).toBe('ranked')
+
+      await api.deleteCategory(created.id)
+      expect((await api.listCatalog()).map((category) => category.id)).not.toContain(
+        created.id,
+      )
+      await expect(
+        api.updateNominee(updated.nominees[0].id, { name: 'X' }),
+      ).rejects.toMatchObject({ status: 404 })
+    })
+
+    it('rechaza nombres repetidos', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+
+      await expect(
+        api.createCategory({ name: 'mejor ACTOR', votingMethod: 'plurality' }),
+      ).rejects.toMatchObject({ status: 400 })
+      await expect(api.updateNominee('a2', { name: 'A1' })).rejects.toMatchObject({
+        status: 400,
+      })
+    })
+  })
 })

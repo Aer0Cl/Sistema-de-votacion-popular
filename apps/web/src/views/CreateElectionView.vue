@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { MAX_CATEGORIES, MIN_CATEGORIES, validateNewElection } from '@votacion/voting-core'
-import type { Category } from '@votacion/voting-core'
+import {
+  MAX_CATEGORIES,
+  MIN_CATEGORIES,
+  MIN_NOMINEES,
+  validateNewElection,
+} from '@votacion/voting-core'
 import { api } from '@/api'
+import type { CatalogCategory } from '@/api'
 import { useElectionsStore } from '@stores/elections'
 import { errorMessage } from '@/utils/format'
 
 const router = useRouter()
 const elections = useElectionsStore()
 
-const catalog = ref<Category[]>([])
+const catalog = ref<CatalogCategory[]>([])
 const name = ref('')
 const closesAt = ref('')
 const selected = ref<string[]>([])
@@ -20,7 +25,7 @@ const saving = ref(false)
 
 onMounted(async () => {
   try {
-    catalog.value = await api.listCategories()
+    catalog.value = await api.listCatalog()
   } catch (error) {
     serverError.value = errorMessage(error)
   }
@@ -33,10 +38,21 @@ const input = computed(() => ({
   categoryIds: selected.value,
 }))
 
-const errors = computed(() => validateNewElection(input.value, catalog.value, new Date()))
+const errors = computed(() =>
+  validateNewElection(
+    input.value,
+    catalog.value,
+    catalog.value.flatMap((category) => category.nominees),
+    new Date(),
+  ),
+)
+
+function usable(category: CatalogCategory) {
+  return category.nominees.length >= MIN_NOMINEES
+}
 
 function selectAll() {
-  selected.value = catalog.value.map((category) => category.id)
+  selected.value = catalog.value.filter(usable).map((category) => category.id)
 }
 
 async function submit() {
@@ -85,13 +101,30 @@ async function submit() {
         </legend>
         <div class="category-actions">
           <button type="button" class="link-button" @click="selectAll">Todas</button>
-          <button type="button" class="link-button" @click="selected = []">Ninguna</button>
+          <button type="button" class="link-button" @click="selected = []">
+            Ninguna
+          </button>
         </div>
-        <label v-for="category in catalog" :key="category.id" class="category-option">
-          <input v-model="selected" type="checkbox" :value="category.id" />
+        <label
+          v-for="category in catalog"
+          :key="category.id"
+          class="category-option"
+          :class="{ muted: !usable(category) }"
+        >
+          <input
+            v-model="selected"
+            type="checkbox"
+            :value="category.id"
+            :disabled="!usable(category)"
+          />
           {{ category.name }}
           <span v-if="category.votingMethod === 'ranked'" class="badge">Ranking</span>
+          <span v-if="!usable(category)" class="badge">Sin nominados suficientes</span>
         </label>
+        <p class="category-actions muted">
+          Los nominados se gestionan en el
+          <RouterLink :to="{ name: 'catalog' }">catálogo</RouterLink>.
+        </p>
       </fieldset>
 
       <ul v-if="submitted && errors.length > 0" class="error">

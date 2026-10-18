@@ -49,7 +49,8 @@ function sorted(tally: Record<string, number>): [string, number][] {
             foto de cierre tomada el {{ formatDateTime(data.snapshotTakenAt) }}
           </template>
           <template v-else>
-            resultados parciales; la votación cierra el {{ formatDateTime(data.closesAt) }}
+            resultados parciales; la votación cierra el
+            {{ formatDateTime(data.closesAt) }}
           </template>
         </p>
         <RouterLink :to="{ name: 'election', params: { code: data.code } }" class="btn">
@@ -63,7 +64,9 @@ function sorted(tally: Record<string, number>): [string, number][] {
         <p v-if="item.result.winners.length === 0" class="muted">Sin respuestas.</p>
         <p v-else>
           <strong>{{ item.result.winners.length > 1 ? 'Empate:' : 'Ganador:' }}</strong>
-          {{ item.result.winners.map((id) => nomineeName(item.categoryId, id)).join(', ') }}
+          {{
+            item.result.winners.map((id) => nomineeName(item.categoryId, id)).join(', ')
+          }}
         </p>
         <p class="muted">{{ item.result.totalBallots }} respuestas</p>
 
@@ -84,7 +87,9 @@ function sorted(tally: Record<string, number>): [string, number][] {
             </ul>
             <p v-if="round.eliminated.length > 0" class="muted">
               Eliminado:
-              {{ round.eliminated.map((id) => nomineeName(item.categoryId, id)).join(', ') }}
+              {{
+                round.eliminated.map((id) => nomineeName(item.categoryId, id)).join(', ')
+              }}
             </p>
             <p v-if="round.exhaustedBallots > 0" class="muted">
               Rankings sin opciones restantes: {{ round.exhaustedBallots }}

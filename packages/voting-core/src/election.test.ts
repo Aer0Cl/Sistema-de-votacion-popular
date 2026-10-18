@@ -48,13 +48,14 @@ describe('validateNewElection', () => {
   }
 
   it('acepta una votacion valida', () => {
-    expect(validateNewElection(valid, catalog, now)).toEqual([])
+    expect(validateNewElection(valid, catalog, nominees, now)).toEqual([])
   })
 
   it('exige al menos 2 categorias distintas', () => {
     const errors = validateNewElection(
       { ...valid, categoryIds: ['actor', 'actor'] },
       catalog,
+      nominees,
       now,
     )
 
@@ -70,6 +71,10 @@ describe('validateNewElection', () => {
     const errors = validateNewElection(
       { ...valid, categoryIds: big.map((category) => category.id) },
       big,
+      big.flatMap((category) => [
+        { id: `${category.id}-1`, categoryId: category.id, name: '1' },
+        { id: `${category.id}-2`, categoryId: category.id, name: '2' },
+      ]),
       now,
     )
 
@@ -80,6 +85,7 @@ describe('validateNewElection', () => {
     const errors = validateNewElection(
       { name: '  ', closesAt: '2027-01-01T00:00:00Z', categoryIds: ['actor', 'zzz'] },
       catalog,
+      nominees,
       now,
     )
 
@@ -91,8 +97,40 @@ describe('validateNewElection', () => {
   })
 })
 
+describe('validateNewElection: nominados', () => {
+  it('exige al menos 2 nominados en cada categoria elegida', () => {
+    const errors = validateNewElection(
+      { name: 'X', closesAt: '2027-02-01T00:00:00Z', categoryIds: ['actor', 'actriz'] },
+      catalog,
+      nominees,
+      now,
+    )
+
+    expect(errors).toEqual([
+      'Estas categorias necesitan al menos 2 nominados: Mejor actriz.',
+    ])
+  })
+})
+
 describe('validateAnswerChoice', () => {
   const [pelicula, actor] = catalog
+
+  it('exige ordenar a todos los nominados en ranking (MVP)', () => {
+    expect(validateAnswerChoice(pelicula, nominees, { ranking: ['p2'] })).toBe(
+      'El ranking debe ordenar a todos los nominados.',
+    )
+  })
+
+  it('acepta rankings parciales si se desactiva la regla', () => {
+    expect(
+      validateAnswerChoice(
+        pelicula,
+        nominees,
+        { ranking: ['p2'] },
+        { requireCompleteRanking: false },
+      ),
+    ).toBeNull()
+  })
 
   it('acepta respuestas validas', () => {
     expect(validateAnswerChoice(actor, nominees, { nomineeId: 'a1' })).toBeNull()
@@ -106,14 +144,21 @@ describe('validateAnswerChoice', () => {
 
   it('rechaza nominados de otra categoria, repetidos o rankings vacios', () => {
     expect(validateAnswerChoice(actor, nominees, { nomineeId: 'p1' })).not.toBeNull()
-    expect(validateAnswerChoice(pelicula, nominees, { ranking: ['p1', 'p1'] })).not.toBeNull()
+    expect(
+      validateAnswerChoice(pelicula, nominees, { ranking: ['p1', 'p1'] }),
+    ).not.toBeNull()
     expect(validateAnswerChoice(pelicula, nominees, { ranking: [] })).not.toBeNull()
-    expect(validateAnswerChoice(pelicula, nominees, { ranking: ['p1', 'a1'] })).not.toBeNull()
+    expect(
+      validateAnswerChoice(pelicula, nominees, { ranking: ['p1', 'a1'] }),
+    ).not.toBeNull()
   })
 })
 
 describe('snapshotAnswers', () => {
-  const election = { closesAt: '2027-03-01T00:00:00Z', categoryIds: ['pelicula', 'actor'] }
+  const election = {
+    closesAt: '2027-03-01T00:00:00Z',
+    categoryIds: ['pelicula', 'actor'],
+  }
 
   function answer(
     userId: string,

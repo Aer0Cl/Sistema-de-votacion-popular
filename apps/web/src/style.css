@@ -8,7 +8,7 @@
   --border: #d8e0ea;
   --shadow: 0 16px 44px rgba(18, 40, 72, 0.11);
 
-  font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+  font-family: 'Segoe UI', 'Trebuchet MS', sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: var(--text-main);
@@ -132,6 +132,12 @@ h1 {
   border-radius: 10px;
   padding: 0.55rem 0.85rem;
   cursor: pointer;
+}
+
+.btn-secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-main);
 }
 
 .btn:disabled {

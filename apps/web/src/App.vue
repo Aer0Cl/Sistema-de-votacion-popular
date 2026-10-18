@@ -17,6 +17,9 @@ async function onUserChange(event: Event) {
   <header class="top-nav-wrap">
     <nav class="top-nav">
       <RouterLink to="/" class="top-link">Mis votaciones</RouterLink>
+      <RouterLink v-if="session.isAdmin" :to="{ name: 'catalog' }" class="top-link">
+        Catálogo
+      </RouterLink>
       <RouterLink to="/about" class="top-link">Acerca</RouterLink>
       <label v-if="session.user" class="user-switch">
         Usuario de prueba

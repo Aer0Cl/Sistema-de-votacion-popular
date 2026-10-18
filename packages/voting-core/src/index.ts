@@ -7,6 +7,8 @@ export {
   ELECTION_CODE_PATTERN,
   MAX_CATEGORIES,
   MIN_CATEGORIES,
+  MIN_NOMINEES,
+  REQUIRE_COMPLETE_RANKING,
   getElectionStatus,
   isValidElectionCode,
   normalizeElectionCode,
@@ -15,5 +17,12 @@ export {
   validateNewElection,
 } from './election'
 export type { NewElectionInput } from './election'
+export {
+  isCategoryLocked,
+  slugId,
+  validateCategoryName,
+  validateNomineeName,
+} from './catalog'
+export type { NewCategoryInput, NomineeInput } from './catalog'
 export { tallyElection } from './results'
 export type { CategoryResult } from './results'

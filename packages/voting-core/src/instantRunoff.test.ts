@@ -106,7 +106,10 @@ describe('tallyInstantRunoff', () => {
     // a 2, b 1, c 1 y no hay rondas previas; c aparece en mas papeletas que b
     const result = tallyInstantRunoff(['a', 'b', 'c'], ballots('ac', 'ac', 'b', 'c'))
 
-    expect(result.rounds[0]).toMatchObject({ eliminated: ['b'], tieBreak: 'total-mentions' })
+    expect(result.rounds[0]).toMatchObject({
+      eliminated: ['b'],
+      tieBreak: 'total-mentions',
+    })
   })
 
   it('declara co-ganadores si los que quedan estan empatados', () => {

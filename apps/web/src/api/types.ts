@@ -4,8 +4,10 @@ import type {
   Category,
   CategoryResult,
   ElectionStatus,
+  NewCategoryInput,
   NewElectionInput,
   Nominee,
+  NomineeInput,
   User,
 } from '@votacion/voting-core'
 
@@ -41,6 +43,13 @@ export type ElectionPreview = Pick<
 // El metodo de votacion viene con cada categoria
 export type CategoryWithNominees = Category & { nominees: Nominee[] }
 
+// Vista de administracion del catalogo
+export type CatalogCategory = CategoryWithNominees & {
+  usedInElections: number
+  // usada en alguna votacion: no se puede eliminar, cambiar su metodo ni agregar nominados
+  locked: boolean
+}
+
 export type ElectionDetail = ElectionSummary & {
   categories: CategoryWithNominees[]
   // abierta: mis respuestas actuales; cerrada: las que quedaron en la foto de cierre
@@ -63,10 +72,20 @@ export interface VotingApi {
   previewElection(code: string): Promise<ElectionPreview>
   joinElection(code: string): Promise<ElectionSummary>
   getElection(code: string): Promise<ElectionDetail>
-  // catalogo completo, para crear votaciones
-  listCategories(): Promise<Category[]>
+  // solo mientras esta abierta; devuelve null si el usuario ya no la ve (no la administra)
+  leaveElection(code: string): Promise<ElectionSummary | null>
   // solo administradores
   createElection(input: NewElectionInput): Promise<ElectionSummary>
+  // catalogo (solo administradores); cada operacion devuelve la categoria actualizada
+  listCatalog(): Promise<CatalogCategory[]>
+  createCategory(input: NewCategoryInput): Promise<CatalogCategory>
+  // el nombre se puede cambiar siempre; el metodo, solo si la categoria no esta en uso
+  updateCategory(categoryId: string, input: NewCategoryInput): Promise<CatalogCategory>
+  // solo si la categoria no esta en uso; elimina tambien sus nominados
+  deleteCategory(categoryId: string): Promise<void>
+  // agregar solo si la categoria no esta en uso; los nominados no se eliminan
+  addNominee(categoryId: string, input: NomineeInput): Promise<CatalogCategory>
+  updateNominee(nomineeId: string, input: NomineeInput): Promise<CatalogCategory>
   getMyAnswers(): Promise<Answer[]>
   // la respuesta se aplica a todas las votaciones abiertas del usuario con esa categoria
   saveAnswer(categoryId: string, choice: AnswerChoice): Promise<Answer>

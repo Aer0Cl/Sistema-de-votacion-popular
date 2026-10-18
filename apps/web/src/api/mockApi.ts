@@ -1,21 +1,32 @@
 import {
   getElectionStatus,
+  isCategoryLocked,
   normalizeElectionCode,
+  slugId,
   snapshotAnswers,
   tallyElection,
   validateAnswerChoice,
+  validateCategoryName,
   validateNewElection,
+  validateNomineeName,
 } from '@votacion/voting-core'
 import type {
   Answer,
   AnswerChoice,
   Election,
   ElectionSnapshot,
+  NewCategoryInput,
   NewElectionInput,
+  NomineeInput,
 } from '@votacion/voting-core'
 import type { SeedData } from './seed'
 import { ApiError } from './types'
-import type { CategoryWithNominees, ElectionSummary, VotingApi } from './types'
+import type {
+  CatalogCategory,
+  CategoryWithNominees,
+  ElectionSummary,
+  VotingApi,
+} from './types'
 
 type MockApiOptions = {
   seed: SeedData
@@ -34,7 +45,7 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 // JSON y no structuredClone: los argumentos pueden venir como proxies reactivos de Vue
 function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T)
 }
 
 /**
@@ -143,6 +154,50 @@ export function createMockApi(options: MockApiOptions): MockVotingApi {
     return [...latest.values()]
   }
 
+  function requireAdmin(message: string) {
+    if (me().role !== 'admin') {
+      throw new ApiError(403, message)
+    }
+  }
+
+  function findCategory(categoryId: string) {
+    const category = state.categories.find((candidate) => candidate.id === categoryId)
+    if (!category) {
+      throw new ApiError(404, 'La categoria no existe.')
+    }
+    return category
+  }
+
+  function findNominee(nomineeId: string) {
+    const nominee = state.nominees.find((candidate) => candidate.id === nomineeId)
+    if (!nominee) {
+      throw new ApiError(404, 'El nominado no existe.')
+    }
+    return nominee
+  }
+
+  function catalogEntry(categoryId: string): CatalogCategory {
+    const [category] = categoriesWithNominees([categoryId])
+    const usedInElections = state.elections.filter((election) =>
+      election.categoryIds.includes(categoryId),
+    ).length
+    return { ...category, usedInElections, locked: usedInElections > 0 }
+  }
+
+  function requireUnlocked(categoryId: string, action: string) {
+    if (isCategoryLocked(categoryId, state.elections)) {
+      throw new ApiError(
+        409,
+        `La categoria ya se usa en una votacion: no se puede ${action}.`,
+      )
+    }
+  }
+
+  function cleanNominee(input: NomineeInput) {
+    const description = input.description?.trim()
+    return { name: input.name.trim(), ...(description ? { description } : {}) }
+  }
+
   function generateCode() {
     for (;;) {
       const code = Array.from(
@@ -232,18 +287,125 @@ export function createMockApi(options: MockApiOptions): MockVotingApi {
         }
       }),
 
-    listCategories: () =>
+    leaveElection: (code) =>
       respond(() => {
         me()
-        return state.categories
+        const election = findElection(code)
+        if (!isMember(election)) {
+          throw new ApiError(409, 'No participas en esta votacion.')
+        }
+        if (status(election) === 'closed') {
+          throw new ApiError(
+            409,
+            'La votacion ya cerro; tus respuestas quedaron registradas.',
+          )
+        }
+        // Las respuestas se conservan: son compartidas con las otras votaciones del usuario
+        state.memberships = state.memberships.filter(
+          (membership) =>
+            !(membership.electionId === election.id && membership.userId === userId),
+        )
+        return isAdmin(election) ? summary(election) : null
+      }),
+
+    listCatalog: () =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        return state.categories.map((category) => catalogEntry(category.id))
+      }),
+
+    createCategory: (input: NewCategoryInput) =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        const error = validateCategoryName(input.name, state.categories)
+        if (error) {
+          throw new ApiError(400, error)
+        }
+        const id = slugId(
+          input.name,
+          new Set(state.categories.map((category) => category.id)),
+        )
+        state.categories.push({
+          id,
+          name: input.name.trim(),
+          votingMethod: input.votingMethod,
+        })
+        return catalogEntry(id)
+      }),
+
+    updateCategory: (categoryId, input) =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        const category = findCategory(categoryId)
+        const error = validateCategoryName(input.name, state.categories, categoryId)
+        if (error) {
+          throw new ApiError(400, error)
+        }
+        if (input.votingMethod !== category.votingMethod) {
+          requireUnlocked(categoryId, 'cambiar su metodo de votacion')
+        }
+        category.name = input.name.trim()
+        category.votingMethod = input.votingMethod
+        return catalogEntry(categoryId)
+      }),
+
+    deleteCategory: (categoryId) =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        findCategory(categoryId)
+        requireUnlocked(categoryId, 'eliminar')
+        state.categories = state.categories.filter(
+          (category) => category.id !== categoryId,
+        )
+        state.nominees = state.nominees.filter(
+          (nominee) => nominee.categoryId !== categoryId,
+        )
+      }),
+
+    addNominee: (categoryId, input) =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        findCategory(categoryId)
+        requireUnlocked(categoryId, 'agregar nominados')
+        const error = validateNomineeName(input.name, categoryId, state.nominees)
+        if (error) {
+          throw new ApiError(400, error)
+        }
+        const id = slugId(
+          `${categoryId}-${input.name}`,
+          new Set(state.nominees.map((nominee) => nominee.id)),
+        )
+        state.nominees.push({ id, categoryId, ...cleanNominee(input) })
+        return catalogEntry(categoryId)
+      }),
+
+    updateNominee: (nomineeId, input) =>
+      respond(() => {
+        requireAdmin('Solo los administradores gestionan el catalogo.')
+        const nominee = findNominee(nomineeId)
+        const error = validateNomineeName(
+          input.name,
+          nominee.categoryId,
+          state.nominees,
+          nomineeId,
+        )
+        if (error) {
+          throw new ApiError(400, error)
+        }
+        const { name, description } = cleanNominee(input)
+        nominee.name = name
+        if (description) {
+          nominee.description = description
+        } else {
+          delete nominee.description
+        }
+        return catalogEntry(nominee.categoryId)
       }),
 
     createElection: (input: NewElectionInput) =>
       respond(() => {
-        if (me().role !== 'admin') {
-          throw new ApiError(403, 'Solo los administradores pueden crear votaciones.')
-        }
-        const errors = validateNewElection(input, state.categories, now())
+        requireAdmin('Solo los administradores pueden crear votaciones.')
+        const errors = validateNewElection(input, state.categories, state.nominees, now())
         if (errors.length > 0) {
           throw new ApiError(400, errors.join(' '))
         }
@@ -270,11 +432,7 @@ export function createMockApi(options: MockApiOptions): MockVotingApi {
     saveAnswer: (categoryId, choice: AnswerChoice) =>
       respond(() => {
         me()
-        const category = state.categories.find((candidate) => candidate.id === categoryId)
-        if (!category) {
-          throw new ApiError(404, 'La categoria no existe.')
-        }
-
+        const category = findCategory(categoryId)
         const error = validateAnswerChoice(category, state.nominees, choice)
         if (error) {
           throw new ApiError(400, error)

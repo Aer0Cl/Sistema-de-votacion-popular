@@ -20,10 +20,30 @@ const at = '2027-02-01T00:00:00Z'
 describe('tallyElection', () => {
   it('cuenta cada categoria con su metodo', () => {
     const answers: Answer[] = [
-      { userId: 'u1', categoryId: 'pelicula', updatedAt: at, ranking: ['p1', 'p2', 'p3'] },
-      { userId: 'u2', categoryId: 'pelicula', updatedAt: at, ranking: ['p2', 'p1', 'p3'] },
-      { userId: 'u3', categoryId: 'pelicula', updatedAt: at, ranking: ['p3', 'p2', 'p1'] },
-      { userId: 'u4', categoryId: 'pelicula', updatedAt: at, ranking: ['p2', 'p3', 'p1'] },
+      {
+        userId: 'u1',
+        categoryId: 'pelicula',
+        updatedAt: at,
+        ranking: ['p1', 'p2', 'p3'],
+      },
+      {
+        userId: 'u2',
+        categoryId: 'pelicula',
+        updatedAt: at,
+        ranking: ['p2', 'p1', 'p3'],
+      },
+      {
+        userId: 'u3',
+        categoryId: 'pelicula',
+        updatedAt: at,
+        ranking: ['p3', 'p2', 'p1'],
+      },
+      {
+        userId: 'u4',
+        categoryId: 'pelicula',
+        updatedAt: at,
+        ranking: ['p2', 'p3', 'p1'],
+      },
       { userId: 'u1', categoryId: 'actor', updatedAt: at, nomineeId: 'a2' },
       { userId: 'u2', categoryId: 'actor', updatedAt: at, nomineeId: 'a2' },
       { userId: 'u3', categoryId: 'actor', updatedAt: at, nomineeId: 'a1' },

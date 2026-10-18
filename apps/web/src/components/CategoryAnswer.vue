@@ -34,7 +34,8 @@ function orderFromAnswer(): Nominee[] {
 }
 
 function resetDraft() {
-  selected.value = props.answer && 'nomineeId' in props.answer ? props.answer.nomineeId : null
+  selected.value =
+    props.answer && 'nomineeId' in props.answer ? props.answer.nomineeId : null
   order.value = orderFromAnswer()
 }
 
@@ -48,7 +49,8 @@ const dirty = computed(() => {
     const current = order.value.map((nominee) => nominee.id)
     return saved === null || saved.join('|') !== current.join('|')
   }
-  const saved = props.answer && 'nomineeId' in props.answer ? props.answer.nomineeId : null
+  const saved =
+    props.answer && 'nomineeId' in props.answer ? props.answer.nomineeId : null
   return selected.value !== null && selected.value !== saved
 })
 
@@ -65,7 +67,9 @@ function save() {
   <article class="card category-card">
     <header class="category-header">
       <h2>{{ category.name }}</h2>
-      <span class="badge">{{ isRanked ? 'Ranking de preferencias' : 'Mayoría simple' }}</span>
+      <span class="badge">{{
+        isRanked ? 'Ranking de preferencias' : 'Mayoría simple'
+      }}</span>
     </header>
 
     <p v-if="isRanked && editable" class="muted">
@@ -100,8 +104,8 @@ function save() {
         Tu respuesta también se aplica en: {{ sharedWith.join(', ') }}.
       </p>
       <p v-if="frozenIn.length > 0" class="muted">
-        En {{ frozenIn.join(', ') }} (cerrada) queda tu respuesta registrada al cierre; los
-        cambios no la afectan.
+        En {{ frozenIn.join(', ') }} (cerrada) queda tu respuesta registrada al cierre;
+        los cambios no la afectan.
       </p>
       <p v-if="error" class="error">{{ error }}</p>
       <button class="btn" type="button" :disabled="!dirty || saving" @click="save">
