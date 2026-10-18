@@ -10,38 +10,45 @@ no pisa lo que los administradores hayan editado.
 import argparse
 import sys
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
 from .domain.clock import to_iso
+from .domain.rules import category_id
+
+# Edicion 2026 (incluye la nueva categoria de casting). Los ids combinan nombre y año, igual
+# que los que genera la API: "mejor-pelicula-2026"
+SEED_YEAR = 2026
+BEST_PICTURE_CATEGORY = "Mejor película"
 
 CATEGORIES = [
-    ("mejor-pelicula", "Mejor película"),
-    ("mejor-direccion", "Mejor dirección"),
-    ("mejor-actor", "Mejor actor"),
-    ("mejor-actriz", "Mejor actriz"),
-    ("mejor-actor-reparto", "Mejor actor de reparto"),
-    ("mejor-actriz-reparto", "Mejor actriz de reparto"),
-    ("mejor-guion-original", "Mejor guion original"),
-    ("mejor-guion-adaptado", "Mejor guion adaptado"),
-    ("mejor-pelicula-animacion", "Mejor película de animación"),
-    ("mejor-pelicula-internacional", "Mejor película internacional"),
-    ("mejor-casting", "Mejor dirección de casting"),
-    ("mejor-documental", "Mejor documental"),
-    ("mejor-corto-documental", "Mejor cortometraje documental"),
-    ("mejor-corto-accion-real", "Mejor cortometraje de acción real"),
-    ("mejor-corto-animacion", "Mejor cortometraje de animación"),
-    ("mejor-banda-sonora", "Mejor banda sonora original"),
-    ("mejor-cancion", "Mejor canción original"),
-    ("mejor-sonido", "Mejor sonido"),
-    ("mejor-diseno-produccion", "Mejor diseño de producción"),
-    ("mejor-fotografia", "Mejor fotografía"),
-    ("mejor-maquillaje", "Mejor maquillaje y peluquería"),
-    ("mejor-vestuario", "Mejor diseño de vestuario"),
-    ("mejor-montaje", "Mejor montaje / edición"),
-    ("mejores-efectos-visuales", "Mejores efectos visuales"),
+    "Mejor película",
+    "Mejor dirección",
+    "Mejor actor",
+    "Mejor actriz",
+    "Mejor actor de reparto",
+    "Mejor actriz de reparto",
+    "Mejor guion original",
+    "Mejor guion adaptado",
+    "Mejor película de animación",
+    "Mejor película internacional",
+    "Mejor dirección de casting",
+    "Mejor documental",
+    "Mejor cortometraje documental",
+    "Mejor cortometraje de acción real",
+    "Mejor cortometraje de animación",
+    "Mejor banda sonora original",
+    "Mejor canción original",
+    "Mejor sonido",
+    "Mejor diseño de producción",
+    "Mejor fotografía",
+    "Mejor maquillaje y peluquería",
+    "Mejor diseño de vestuario",
+    "Mejor montaje / edición",
+    "Mejores efectos visuales",
 ]
 
 BEST_PICTURE = [
@@ -61,20 +68,23 @@ DEV_USERS = [
 ]
 
 
-def seed_items(now: datetime) -> dict[str, list[dict[str, str]]]:
+def seed_items(now: datetime) -> dict[str, list[dict[str, Any]]]:
     categories = []
     nominees = []
-    for index, (category_id, name) in enumerate(CATEGORIES):
-        method = "ranked" if category_id == "mejor-pelicula" else "plurality"
-        categories.append({"id": category_id, "name": name, "votingMethod": method})
+    taken: set[str] = set()
+    for index, name in enumerate(CATEGORIES):
+        new_id = category_id(name, SEED_YEAR, taken)
+        taken.add(new_id)
+        method = "ranked" if name == BEST_PICTURE_CATEGORY else "plurality"
+        categories.append({"id": new_id, "name": name, "votingMethod": method, "year": SEED_YEAR})
         names = BEST_PICTURE if method == "ranked" else [f"Nominado {n}" for n in range(1, 6)]
         for position, nominee_name in enumerate(names):
             # createdAt creciente para conservar el orden de los nominados
             created_at = now + timedelta(milliseconds=index * 10 + position)
             nominees.append(
                 {
-                    "id": f"{category_id}-{position + 1}",
-                    "categoryId": category_id,
+                    "id": f"{new_id}-{position + 1}",
+                    "categoryId": new_id,
                     "name": nominee_name,
                     "createdAt": to_iso(created_at),
                 }
@@ -82,7 +92,7 @@ def seed_items(now: datetime) -> dict[str, list[dict[str, str]]]:
     return {"categories": categories, "nominees": nominees, "users": DEV_USERS}
 
 
-def put_if_absent(table, item: dict[str, str]) -> bool:
+def put_if_absent(table, item: dict[str, Any]) -> bool:
     try:
         table.put_item(Item=item, ConditionExpression=Attr("id").not_exists())
     except table.meta.client.exceptions.ConditionalCheckFailedException:

@@ -2,7 +2,7 @@
 
 Claves (ver infra/cdk/lib/data-stack.ts):
   users          id                    atributos: displayName (nombre), role (voter | admin)
-  categories     id
+  categories     id ("<nombre>-<año>")  atributos: name, votingMethod, year
   nominees       id                    GSI byCategory: categoryId + createdAt
   elections      code
   memberships    electionCode + userId GSI byUser: userId + electionCode
@@ -38,6 +38,13 @@ def _user_category(user_id: str, category_id: str) -> str:
 
 def _clean_answer(item: Item) -> Item:
     return {k: v for k, v in item.items() if k not in _ANSWER_KEY_FIELDS}
+
+
+def _clean_category(item: Item) -> Item:
+    # DynamoDB devuelve los numeros como Decimal, que json.dumps no serializa
+    if "year" in item:
+        return {**item, "year": int(item["year"])}
+    return item
 
 
 class DynamoRepository:
@@ -89,10 +96,11 @@ class DynamoRepository:
     # Catalogo ------------------------------------------------------------------------
 
     def list_categories(self) -> list[Item]:
-        return list(self._items("scan", "categories"))
+        return [_clean_category(item) for item in self._items("scan", "categories")]
 
     def get_category(self, category_id: str) -> Item | None:
-        return self._tables["categories"].get_item(Key={"id": category_id}).get("Item")
+        item = self._tables["categories"].get_item(Key={"id": category_id}).get("Item")
+        return None if item is None else _clean_category(item)
 
     def put_category(self, category: Item) -> None:
         self._tables["categories"].put_item(Item=category)
@@ -122,6 +130,13 @@ class DynamoRepository:
 
     def put_nominee(self, nominee: Item) -> None:
         self._tables["nominees"].put_item(Item=nominee)
+
+    def put_catalog(self, categories: list[Item], nominees: list[Item]) -> None:
+        # BatchWriteItem de a 25; batch_writer reintenta los elementos no procesados
+        for table, items in (("categories", categories), ("nominees", nominees)):
+            with self._tables[table].batch_writer() as batch:
+                for item in items:
+                    batch.put_item(Item=item)
 
     # Votaciones ----------------------------------------------------------------------
 

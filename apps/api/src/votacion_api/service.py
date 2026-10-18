@@ -13,7 +13,11 @@ from aws_lambda_powertools import Logger
 
 from .domain.clock import normalize_iso, parse_iso, to_iso
 from .domain.rules import (
+    MAX_IMPORT_CATEGORIES,
+    MAX_IMPORT_NOMINEES,
     VOTING_METHODS,
+    category_year,
+    default_voting_method,
     election_status,
     is_category_locked,
     normalize_election_code,
@@ -21,10 +25,14 @@ from .domain.rules import (
     tally_election,
     validate_answer_choice,
     validate_category_name,
+    validate_category_year,
     validate_new_election,
     validate_new_nominees,
     validate_new_user,
     validate_nominee_name,
+)
+from .domain.rules import (
+    category_id as new_category_id,
 )
 from .errors import ApiError
 from .repository import Item, Repository
@@ -34,6 +42,7 @@ logger = Logger(child=True)
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 8
 CATALOG_ADMIN_MESSAGE = "Solo los administradores gestionan el catalogo."
+YEAR_IS_FIXED = "El año de una categoria no se puede cambiar: forma parte de su id."
 USERS_ADMIN_MESSAGE = "Solo los administradores pueden crear usuarios."
 
 
@@ -402,9 +411,14 @@ class VotingService:
         elections = self.repo.list_elections()
         return [self._catalog_entry(c["id"], elections) for c in self.repo.list_categories()]
 
-    def _new_nominees(self, category_id: str, items: list[Item]) -> list[Item]:
-        """Valida el lote completo y arma los registros; no escribe nada."""
-        nominees = self.repo.list_nominees()
+    def _new_nominees(
+        self, category_id: str, items: list[Item], nominees: list[Item] | None = None
+    ) -> list[Item]:
+        """Valida el lote completo y arma los registros; no escribe nada.
+
+        nominees: los existentes, si ya se leyeron (la carga masiva los lee una sola vez).
+        """
+        nominees = self.repo.list_nominees() if nominees is None else nominees
         error = validate_new_nominees(category_id, items, nominees)
         if error:
             raise ApiError(400, error)
@@ -443,35 +457,134 @@ class VotingService:
             )
 
     def create_category(self, user_id: str, data: Item) -> Item:
-        """Crea la categoria y, si vienen, sus nominados (data["nominees"], opcional)."""
+        """Crea la categoria y, si vienen, sus nominados (data["nominees"], opcional).
+
+        El id combina el nombre y el año (data["year"], por defecto el actual).
+        """
         self._require_admin(user_id, CATALOG_ADMIN_MESSAGE)
         catalog = self.repo.list_categories()
-        error = validate_category_name(data["name"], catalog)
+        year = data.get("year")
+        if year is None:
+            year = self.now().year
+        error = validate_category_year(year) or validate_category_name(data["name"], year, catalog)
         if error:
             raise ApiError(400, error)
         if data["votingMethod"] not in VOTING_METHODS:
             raise ApiError(400, "El metodo de votacion no es valido.")
-        category_id = slug_id(data["name"], {c["id"] for c in catalog})
+        name = data["name"].strip()
+        new_id = new_category_id(name, year, {c["id"] for c in catalog})
         # Se valida todo antes de escribir, para no dejar una categoria a medias
-        records = self._new_nominees(category_id, data.get("nominees") or [])
+        records = self._new_nominees(new_id, data.get("nominees") or [])
         self.repo.put_category(
-            {"id": category_id, "name": data["name"].strip(), "votingMethod": data["votingMethod"]}
+            {"id": new_id, "name": name, "votingMethod": data["votingMethod"], "year": year}
         )
         logger.info(
             "Categoria creada",
             extra={
                 "action": "category.created",
-                "categoryId": category_id,
+                "categoryId": new_id,
+                "year": year,
                 "nominees": len(records),
             },
         )
-        self._save_nominees(category_id, records)
-        return self._catalog_entry(category_id)
+        self._save_nominees(new_id, records)
+        return self._catalog_entry(new_id)
+
+    def import_catalog(self, user_id: str, editions: list[Item]) -> Item:
+        """Carga masiva de categorias (con o sin nominados) agrupadas por año; todo o nada.
+
+        editions: [{"year": 2024, "categories": [{"name", "votingMethod"?, "nominees": [...]}]}]
+        Si una categoria ya existe con el mismo nombre y año, no se carga nada (409).
+        """
+        self._require_admin(user_id, CATALOG_ADMIN_MESSAGE)
+        total_categories = sum(len(e["categories"]) for e in editions)
+        total_nominees = sum(len(c["nominees"]) for e in editions for c in e["categories"])
+        if total_categories == 0:
+            raise ApiError(400, "La carga no trae categorias.")
+        if total_categories > MAX_IMPORT_CATEGORIES:
+            raise ApiError(
+                400, f"Se pueden cargar hasta {MAX_IMPORT_CATEGORIES} categorias por solicitud."
+            )
+        if total_nominees > MAX_IMPORT_NOMINEES:
+            raise ApiError(
+                400, f"Se pueden cargar hasta {MAX_IMPORT_NOMINEES} nominados por solicitud."
+            )
+
+        catalog = self.repo.list_categories()
+        nominees = self.repo.list_nominees()
+        taken = {c["id"] for c in catalog}
+        accepted: list[Item] = []  # categorias de esta carga, para detectar repetidas
+        existing: list[str] = []
+        categories: list[Item] = []
+        new_nominees: list[Item] = []
+        for edition in editions:
+            year = edition["year"]
+            error = validate_category_year(year)
+            if error:
+                raise ApiError(400, f"Año {year}: {error}")
+            for position, item in enumerate(edition["categories"]):
+                where = f"Año {year}, categoria {position + 1}"
+                name = item["name"].strip()
+                error = validate_category_name(name, year, accepted)
+                if error:
+                    raise ApiError(400, f"{where}: {error}")
+                if validate_category_name(name, year, catalog):
+                    existing.append(f"{name} ({year})")
+                method = item.get("votingMethod") or default_voting_method(name)
+                if method not in VOTING_METHODS:
+                    raise ApiError(400, f"{where}: el metodo de votacion no es valido.")
+                new_id = new_category_id(name, year, taken)
+                taken.add(new_id)
+                category = {"id": new_id, "name": name, "votingMethod": method, "year": year}
+                accepted.append(category)
+                try:
+                    records = self._new_nominees(new_id, item["nominees"], nominees)
+                except ApiError as error:
+                    raise ApiError(error.status, f"{where} ({name}): {error.message}") from error
+                nominees.extend(records)
+                categories.append(category)
+                new_nominees.extend(records)
+        if existing:
+            raise ApiError(
+                409,
+                "Ya existen estas categorias, no se cargo nada: " + ", ".join(existing) + ".",
+            )
+
+        self.repo.put_catalog(categories, new_nominees)
+        logger.info(
+            "Catalogo cargado",
+            extra={
+                "action": "catalog.imported",
+                "years": sorted({c["year"] for c in categories}),
+                "categories": len(categories),
+                "nominees": len(new_nominees),
+            },
+        )
+        # Categorias nuevas: ninguna votacion las usa todavia
+        by_category: dict[str, list[Item]] = {}
+        for nominee in new_nominees:
+            by_category.setdefault(nominee["categoryId"], []).append(_public_nominee(nominee))
+        return {
+            "createdCategories": len(categories),
+            "createdNominees": len(new_nominees),
+            "categories": [
+                {
+                    **c,
+                    "nominees": by_category.get(c["id"], []),
+                    "usedInElections": 0,
+                    "locked": False,
+                }
+                for c in categories
+            ],
+        }
 
     def update_category(self, user_id: str, category_id: str, data: Item) -> Item:
         self._require_admin(user_id, CATALOG_ADMIN_MESSAGE)
         category = self._find_category(category_id)
-        error = validate_category_name(data["name"], self.repo.list_categories(), category_id)
+        year = category_year(category)
+        if data.get("year") is not None and data["year"] != year:
+            raise ApiError(400, YEAR_IS_FIXED)
+        error = validate_category_name(data["name"], year, self.repo.list_categories(), category_id)
         if error:
             raise ApiError(400, error)
         if data["votingMethod"] not in VOTING_METHODS:

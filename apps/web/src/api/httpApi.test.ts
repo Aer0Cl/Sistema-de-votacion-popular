@@ -67,6 +67,6 @@ describe('httpApi', () => {
     mockFetch(204)
     const api = createHttpApi('https://api.test/api/v1', 'u-alice')
 
-    await expect(api.deleteCategory('mejor-sonido')).resolves.toBeUndefined()
+    await expect(api.deleteCategory('mejor-sonido-2027')).resolves.toBeUndefined()
   })
 })

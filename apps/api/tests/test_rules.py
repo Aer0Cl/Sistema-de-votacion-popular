@@ -4,12 +4,14 @@ import pytest
 
 from votacion_api.domain.clock import normalize_iso
 from votacion_api.domain.rules import (
+    category_id,
     election_status,
     is_valid_election_code,
     slug_id,
     snapshot_answers,
     validate_answer_choice,
     validate_category_name,
+    validate_category_year,
     validate_new_election,
 )
 
@@ -106,8 +108,21 @@ def test_foto_toma_la_ultima_version_anterior_al_cierre():
 
 
 def test_nombres_y_ids_del_catalogo():
-    assert validate_category_name(" MEJOR ACTOR ", CATALOG)
-    assert validate_category_name("Mejor actor", CATALOG, "actor") is None
+    catalog = [{**c, "year": 2026} for c in CATALOG]
+    assert validate_category_name(" MEJOR ACTOR ", 2026, catalog)
+    assert validate_category_name("Mejor actor", 2027, catalog) is None  # otro año
+    assert validate_category_name("Mejor actor", 2026, catalog, "actor") is None
+    assert category_id("Mejor película", 2026, set()) == "mejor-pelicula-2026"
+    assert category_id("Mejor película", 2026, {"mejor-pelicula-2026"}) == "mejor-pelicula-2026-2"
     assert slug_id("Mejor dirección", set()) == "mejor-direccion"
     assert slug_id("Mejor actor", {"mejor-actor"}) == "mejor-actor-2"
     assert slug_id("¡¡!!", set()) == "item"
+
+
+@pytest.mark.parametrize("year", [1899, 2101, 2026.0, "2026", True, None])
+def test_anio_de_categoria_invalido(year):
+    assert validate_category_year(year)
+
+
+def test_anio_de_categoria_valido():
+    assert validate_category_year(2026) is None

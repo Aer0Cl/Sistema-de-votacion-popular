@@ -1,4 +1,5 @@
 import {
+  categoryId as newCategoryId,
   getElectionStatus,
   isCategoryLocked,
   normalizeElectionCode,
@@ -7,6 +8,7 @@ import {
   tallyElection,
   validateAnswerChoice,
   validateCategoryName,
+  validateCategoryYear,
   validateNewElection,
   validateNomineeName,
 } from '@votacion/voting-core'
@@ -50,6 +52,8 @@ function clone<T>(value: T): T {
  * Las votaciones cerradas se fotografian al primer acceso despues del cierre, como lo
  * haria un proceso programado; la foto solo usa respuestas anteriores a la fecha de termino.
  */
+const YEAR_IS_FIXED = 'El año de una categoria no se puede cambiar: forma parte de su id.'
+
 export function createMockApi(options: MockApiOptions): MockVotingApi {
   const state = clone(options.seed)
   const snapshots = new Map<string, ElectionSnapshot>()
@@ -314,18 +318,24 @@ export function createMockApi(options: MockApiOptions): MockVotingApi {
     createCategory: (input: NewCategoryInput) =>
       respond(() => {
         requireAdmin('Solo los administradores gestionan el catalogo.')
-        const error = validateCategoryName(input.name, state.categories)
+        // El año es parte del id: por defecto el actual
+        const year = input.year ?? now().getUTCFullYear()
+        const error =
+          validateCategoryYear(year) ??
+          validateCategoryName(input.name, year, state.categories)
         if (error) {
           throw new ApiError(400, error)
         }
-        const id = slugId(
-          input.name,
+        const id = newCategoryId(
+          input.name.trim(),
+          year,
           new Set(state.categories.map((category) => category.id)),
         )
         state.categories.push({
           id,
           name: input.name.trim(),
           votingMethod: input.votingMethod,
+          year,
         })
         return catalogEntry(id)
       }),
@@ -334,7 +344,15 @@ export function createMockApi(options: MockApiOptions): MockVotingApi {
       respond(() => {
         requireAdmin('Solo los administradores gestionan el catalogo.')
         const category = findCategory(categoryId)
-        const error = validateCategoryName(input.name, state.categories, categoryId)
+        if (input.year !== undefined && input.year !== category.year) {
+          throw new ApiError(400, YEAR_IS_FIXED)
+        }
+        const error = validateCategoryName(
+          input.name,
+          category.year,
+          state.categories,
+          categoryId,
+        )
         if (error) {
           throw new ApiError(400, error)
         }

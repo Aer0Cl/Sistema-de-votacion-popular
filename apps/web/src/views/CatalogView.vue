@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { MAX_CATEGORY_YEAR, MIN_CATEGORY_YEAR } from '@votacion/voting-core'
 import type { VotingMethod } from '@votacion/voting-core'
 import { api } from '@/api'
 import type { CatalogCategory } from '@/api'
@@ -8,7 +9,12 @@ import { errorMessage } from '@/utils/format'
 
 const catalog = ref<CatalogCategory[]>([])
 const loadError = ref('')
-const form = reactive({ name: '', votingMethod: 'plurality' as VotingMethod })
+const currentYear = () => new Date().getFullYear()
+const form = reactive({
+  name: '',
+  votingMethod: 'plurality' as VotingMethod,
+  year: currentYear(),
+})
 const createError = ref('')
 const creating = ref(false)
 
@@ -40,6 +46,7 @@ async function createCategory() {
     replace(await api.createCategory({ ...form }))
     form.name = ''
     form.votingMethod = 'plurality'
+    form.year = currentYear()
   } catch (error) {
     createError.value = errorMessage(error)
   } finally {
@@ -65,6 +72,22 @@ async function createCategory() {
         Nombre
         <input v-model="form.name" maxlength="80" placeholder="Ej: Mejor sonido" />
       </label>
+      <label class="field">
+        Año de la premiación
+        <input
+          v-model.number="form.year"
+          type="number"
+          :min="MIN_CATEGORY_YEAR"
+          :max="MAX_CATEGORY_YEAR"
+          step="1"
+          required
+        />
+      </label>
+      <p class="muted">
+        El id de la categoría combina el nombre y el año (Mejor sonido de 2026 →
+        <code>mejor-sonido-2026</code>), por eso el año no se puede cambiar después. Un
+        mismo nombre puede repetirse en años distintos.
+      </p>
       <fieldset class="methods">
         <legend>Método de votación</legend>
         <label>

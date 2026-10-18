@@ -98,6 +98,9 @@ async function addNominee() {
   <details class="card category">
     <summary>
       <strong>{{ category.name }}</strong>
+      <span v-if="category.year" class="badge" title="Forma parte del id; no se cambia">
+        {{ category.year }}
+      </span>
       <span class="badge">
         {{ category.votingMethod === 'ranked' ? 'Ranking' : 'Mayoría simple' }}
       </span>

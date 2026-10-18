@@ -118,6 +118,7 @@ async function submit() {
             :disabled="!usable(category)"
           />
           {{ category.name }}
+          <span v-if="category.year" class="badge">{{ category.year }}</span>
           <span v-if="category.votingMethod === 'ranked'" class="badge">Ranking</span>
           <span v-if="!usable(category)" class="badge">Sin nominados suficientes</span>
         </label>

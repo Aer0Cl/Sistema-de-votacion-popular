@@ -202,20 +202,21 @@ Todas las rutas usan JSON e identifican al usuario con `X-User-Id` en dev. Los e
 `{"message": "..."}` con 400 (datos invalidos), 401 (usuario desconocido), 403 (sin permiso),
 404 (no existe) o 409 (conflicto).
 
-| Metodo y ruta                                                                                      | Quien                 | Para que                                            |
-| -------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------- |
-| `GET /health`                                                                                      | Cualquiera            | Estado de la API                                    |
-| `GET /dev/users`                                                                                   | Cualquiera (solo dev) | Usuarios para el selector del front                 |
-| `GET /me`, `GET /me/elections`, `GET /me/answers`                                                  | Usuario               | Perfil, votaciones y respuestas propias             |
-| `PUT /me/answers/{categoryId}`                                                                     | Usuario               | Guardar respuesta (`nomineeId` o `ranking`)         |
-| `GET /elections/{code}/preview`, `POST .../join`, `DELETE .../membership`, `GET /elections/{code}` | Usuario               | Ver, unirse, abandonar y votar                      |
-| `POST /elections`, `GET /elections/{code}/results`                                                 | Admin                 | Crear votacion; resultados (admins de la votacion)  |
-| `POST /admin/users`                                                                                | Admin                 | Alta de usuario o administrador                     |
-| `GET /admin/catalog`                                                                               | Admin                 | Catalogo con nominados y uso en votaciones          |
-| `POST /admin/categories`                                                                           | Admin                 | Crear categoria, con o sin nominados                |
-| `PATCH`, `DELETE /admin/categories/{categoryId}`                                                   | Admin                 | Editar o eliminar categoria (sin uso en votaciones) |
-| `POST /admin/categories/{categoryId}/nominees`                                                     | Admin                 | Asignar uno o varios nominados a una categoria      |
-| `PATCH /admin/nominees/{nomineeId}`                                                                | Admin                 | Editar nominado (no se eliminan)                    |
+| Metodo y ruta                                                                                      | Quien                 | Para que                                                       |
+| -------------------------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------- |
+| `GET /health`                                                                                      | Cualquiera            | Estado de la API                                               |
+| `GET /dev/users`                                                                                   | Cualquiera (solo dev) | Usuarios para el selector del front                            |
+| `GET /me`, `GET /me/elections`, `GET /me/answers`                                                  | Usuario               | Perfil, votaciones y respuestas propias                        |
+| `PUT /me/answers/{categoryId}`                                                                     | Usuario               | Guardar respuesta (`nomineeId` o `ranking`)                    |
+| `GET /elections/{code}/preview`, `POST .../join`, `DELETE .../membership`, `GET /elections/{code}` | Usuario               | Ver, unirse, abandonar y votar                                 |
+| `POST /elections`, `GET /elections/{code}/results`                                                 | Admin                 | Crear votacion; resultados (admins de la votacion)             |
+| `POST /admin/users`                                                                                | Admin                 | Alta de usuario o administrador                                |
+| `GET /admin/catalog`                                                                               | Admin                 | Catalogo con nominados y uso en votaciones                     |
+| `POST /admin/categories`                                                                           | Admin                 | Crear categoria, con o sin nominados                           |
+| `PATCH`, `DELETE /admin/categories/{categoryId}`                                                   | Admin                 | Editar o eliminar categoria (sin uso en votaciones)            |
+| `POST /admin/categories/{categoryId}/nominees`                                                     | Admin                 | Asignar uno o varios nominados a una categoria                 |
+| `PATCH /admin/nominees/{nomineeId}`                                                                | Admin                 | Editar nominado (no se eliminan)                               |
+| `POST /admin/catalog/import`                                                                       | Admin                 | Carga masiva de categorias con o sin nominados, de varios años |
 
 **Alta de usuarios** (solo `displayName` es obligatorio; `role` es `voter` por defecto y el `id`
 se genera desde el nombre si no se envia, p. ej. `u-eva-diaz`). Responde 201 con el usuario y 409
@@ -228,18 +229,25 @@ curl -X POST <ApiUrl>/admin/users -H "x-user-id: u-alice" -H "content-type: appl
   -d '{"displayName": "Fede", "role": "admin", "id": "u-fede"}'
 ```
 
-**Categoria con o sin nominados** (`votingMethod`: `plurality` o `ranked`; `nominees` es
-opcional y cada uno lleva `name` y `description` opcional):
+**Categoria con o sin nominados** (`votingMethod`: `plurality` o `ranked`; `year`: año de la
+premiacion, por defecto el actual; `nominees` es opcional y cada uno lleva `name` y
+`description` opcional):
 
 ```bash
 curl -X POST <ApiUrl>/admin/categories -H "x-user-id: u-alice" -H "content-type: application/json" \
-  -d '{"name": "Mejor sonido", "votingMethod": "plurality", "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}]}'
+  -d '{"name": "Mejor sonido", "votingMethod": "plurality", "year": 2026, "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}]}'
 ```
+
+El id de una categoria combina su nombre y su año: el ejemplo crea `mejor-sonido-2026`. Un nombre
+puede repetirse en años distintos pero no en el mismo (400). El año va de 1900 a 2100 y no se
+puede cambiar despues (`PATCH` con otro `year` responde 400); el nombre si se puede editar y el id
+se mantiene. El catalogo inicial (`seed`) es de 2026: `mejor-pelicula-2026`, `mejor-actor-2026`,
+etc.
 
 **Asignar nominados a una categoria** (varios con `nominees`, o uno con `name` y `description`):
 
 ```bash
-curl -X POST <ApiUrl>/admin/categories/mejor-sonido/nominees -H "x-user-id: u-alice" \
+curl -X POST <ApiUrl>/admin/categories/mejor-sonido-2026/nominees -H "x-user-id: u-alice" \
   -H "content-type: application/json" -d '{"nominees": [{"name": "Barbie"}, {"name": "Maestro"}]}'
 ```
 
@@ -247,6 +255,46 @@ Ambas responden 201 con la categoria y todos sus nominados en orden. Hasta 50 no
 solicitud; si uno no es valido (sin nombre o repetido en la categoria) no se guarda ninguno. No
 se pueden agregar nominados a una categoria que ya se usa en una votacion (409). Una votacion
 exige al menos 2 nominados por categoria.
+
+**Carga masiva del catalogo** (`POST /admin/catalog/import`): recibe el formato de
+`Premios Oscar 2015-2024.json`, varios años con sus categorias y nominados como textos. Se
+ignoran `edition` y `winner` (el ganador se omite por ahora); `nominees` es opcional:
+
+```json
+{
+  "oscar_awards": [
+    {
+      "year": 2024,
+      "edition": "96th",
+      "categories": [
+        {
+          "name": "Best Picture",
+          "winner": "Oppenheimer",
+          "nominees": ["Barbie", "Oppenheimer"]
+        },
+        { "name": "Best Sound", "nominees": [] }
+      ]
+    }
+  ]
+}
+```
+
+```bash
+curl -X POST <ApiUrl>/admin/catalog/import -H "x-user-id: u-alice" \
+  -H "content-type: application/json" --data-binary "@Premios Oscar 2015-2024.json"
+```
+
+- Cada categoria se crea con id de nombre y año (`best-picture-2024`), igual que
+  `POST /admin/categories`, y sus nominados en el orden del archivo.
+- Metodo de votacion: "Best Picture" / "Mejor pelicula" por ranking y el resto por mayoria
+  simple, salvo que la categoria traiga `votingMethod` (`plurality` o `ranked`). Los nominados
+  tambien pueden ir como objetos `{"name", "description"}`.
+- Es todo o nada: se valida la carga completa antes de escribir. Si una categoria ya existe con
+  el mismo nombre y año responde 409 con la lista y no carga nada; un año, nombre, metodo o
+  nominado invalido (o repetido) responde 400 indicando donde.
+- Limites por solicitud: 100 categorias, 1000 nominados y 50 nominados por categoria.
+- Responde 201 con `createdCategories`, `createdNominees` y las categorias creadas con sus
+  nominados.
 
 ## Pendiente
 

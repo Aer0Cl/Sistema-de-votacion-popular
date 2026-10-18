@@ -103,8 +103,8 @@ def test_catalogo_de_admin(call):
         body={"name": "Mejor sonido", "votingMethod": "plurality"},
     )
     assert status == 201
-    assert created["id"] == "mejor-sonido"
-    assert call("DELETE", "/api/v1/admin/categories/mejor-sonido", user="admin") == (204, None)
+    assert created["id"] == "mejor-sonido-2027"
+    assert call("DELETE", "/api/v1/admin/categories/mejor-sonido-2027", user="admin") == (204, None)
 
 
 def test_usuarios_de_prueba_solo_en_modo_dev(call, monkeypatch):
@@ -159,7 +159,7 @@ def test_categoria_con_nominados_y_asignacion(call):
 
     status, updated = call(
         "POST",
-        "/api/v1/admin/categories/mejor-sonido/nominees",
+        "/api/v1/admin/categories/mejor-sonido-2027/nominees",
         user="admin",
         body={"nominees": [{"name": "Barbie"}, {"name": "Maestro", "description": "2023"}]},
     )
@@ -169,7 +169,7 @@ def test_categoria_con_nominados_y_asignacion(call):
     # La forma de un solo nominado sigue funcionando (la usa el front)
     status, single = call(
         "POST",
-        "/api/v1/admin/categories/mejor-sonido/nominees",
+        "/api/v1/admin/categories/mejor-sonido-2027/nominees",
         user="admin",
         body={"name": "Elvis"},
     )
@@ -177,8 +177,29 @@ def test_categoria_con_nominados_y_asignacion(call):
     assert single["nominees"][-1]["name"] == "Elvis"
 
 
+def test_categoria_con_anio(call):
+    status, created = call(
+        "POST",
+        "/api/v1/admin/categories",
+        user="admin",
+        body={"name": "Mejor sonido", "votingMethod": "plurality", "year": 2026},
+    )
+    assert status == 201
+    assert (created["id"], created["year"]) == ("mejor-sonido-2026", 2026)
+
+    for year in ["2026", True, 2026.5]:
+        body = {"name": "Otra", "votingMethod": "plurality", "year": year}
+        assert call("POST", "/api/v1/admin/categories", user="admin", body=body)[0] == 400
+
+    change = {"name": "Mejor sonido", "votingMethod": "plurality", "year": 2027}
+    assert (
+        call("PATCH", "/api/v1/admin/categories/mejor-sonido-2026", user="admin", body=change)[0]
+        == 400
+    )
+
+
 def test_validacion_de_listas_de_nominados(call):
-    path = "/api/v1/admin/categories/mejor-sonido/nominees"
+    path = "/api/v1/admin/categories/mejor-sonido-2027/nominees"
     base = {"name": "Mejor sonido", "votingMethod": "plurality"}
     assert (
         call("POST", "/api/v1/admin/categories", user="admin", body={**base, "nominees": "Dune"})[0]
@@ -194,3 +215,59 @@ def test_validacion_de_listas_de_nominados(call):
     )
     assert call("POST", path, user="admin", body={"nominees": ["Dune"]})[0] == 400
     assert call("POST", path, user="admin", body={"nominees": []})[0] == 400
+
+
+OSCAR_BODY = {
+    "oscar_awards": [
+        {
+            "year": 2024,
+            "edition": "96th",
+            "categories": [
+                {
+                    "name": "Best Picture",
+                    "winner": "Oppenheimer",
+                    "nominees": ["Barbie", "Oppenheimer"],
+                },
+                {"name": "Best Director", "winner": "Christopher Nolan", "nominees": []},
+            ],
+        },
+        {
+            "year": 2023,
+            "edition": "95th",
+            "categories": [{"name": "Best Actress", "nominees": ["Michelle Yeoh"]}],
+        },
+    ]
+}
+
+
+def test_carga_masiva_del_catalogo(call):
+    status, result = call("POST", "/api/v1/admin/catalog/import", user="admin", body=OSCAR_BODY)
+    assert status == 201
+    assert (result["createdCategories"], result["createdNominees"]) == (3, 3)
+    picture = result["categories"][0]
+    assert (picture["id"], picture["votingMethod"], picture["year"]) == (
+        "best-picture-2024",
+        "ranked",
+        2024,
+    )
+    # El ganador se omite por ahora
+    assert "winner" not in picture
+    assert [n["name"] for n in picture["nominees"]] == ["Barbie", "Oppenheimer"]
+
+    # Repetir la carga choca con lo ya cargado
+    assert call("POST", "/api/v1/admin/catalog/import", user="admin", body=OSCAR_BODY)[0] == 409
+
+
+def test_validacion_de_la_carga_masiva(call):
+    path = "/api/v1/admin/catalog/import"
+    for body in [
+        {},
+        {"oscar_awards": "x"},
+        {"oscar_awards": [{"categories": []}]},
+        {"oscar_awards": [{"year": "2024", "categories": []}]},
+        {"oscar_awards": [{"year": 2024, "categories": "x"}]},
+        {"oscar_awards": [{"year": 2024, "categories": [{"nominees": []}]}]},
+        {"oscar_awards": [{"year": 2024, "categories": [{"name": "X", "nominees": [1]}]}]},
+    ]:
+        assert call("POST", path, user="admin", body=body)[0] == 400, body
+    assert call("POST", path, user="ana", body=OSCAR_BODY)[0] == 403

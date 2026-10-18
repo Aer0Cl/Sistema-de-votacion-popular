@@ -93,9 +93,9 @@ def seed(repo) -> None:
         {"id": "beto", "displayName": "Beto", "role": "voter"},
     ]
     categories = [
-        {"id": "pelicula", "name": "Mejor pelicula", "votingMethod": "ranked"},
-        {"id": "actor", "name": "Mejor actor", "votingMethod": "plurality"},
-        {"id": "actriz", "name": "Mejor actriz", "votingMethod": "plurality"},
+        {"id": "pelicula", "name": "Mejor pelicula", "votingMethod": "ranked", "year": 2027},
+        {"id": "actor", "name": "Mejor actor", "votingMethod": "plurality", "year": 2027},
+        {"id": "actriz", "name": "Mejor actriz", "votingMethod": "plurality", "year": 2027},
     ]
     nominees = [
         ("p1", "pelicula"),

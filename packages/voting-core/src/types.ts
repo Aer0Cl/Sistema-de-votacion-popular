@@ -2,9 +2,13 @@ export type VotingMethod = 'plurality' | 'ranked'
 
 // Categoria del catalogo; es la misma en todas las votaciones que la incluyen
 export type Category = {
+  // nombre y año: "Mejor película" de 2026 -> "mejor-pelicula-2026" (ver categoryId)
   id: string
   name: string
   votingMethod: VotingMethod
+  // edicion de la premiacion; forma parte del id, por eso no se puede cambiar. Opcional solo
+  // para categorias creadas antes de que existiera
+  year?: number
 }
 
 // Los nominados de una categoria son los mismos en todas las votaciones

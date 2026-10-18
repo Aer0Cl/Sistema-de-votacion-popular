@@ -91,6 +91,14 @@ def _optional_text(body: dict[str, Any], key: str) -> str | None:
     return value
 
 
+def _optional_int(body: dict[str, Any], key: str) -> int | None:
+    value = body.get(key)
+    # bool es subclase de int en Python: true no es un año
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+        raise ApiError(400, f"El campo '{key}' debe ser un numero entero.")
+    return value
+
+
 def _text_list(body: dict[str, Any], key: str) -> list[str]:
     value = body.get(key)
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
@@ -100,6 +108,29 @@ def _text_list(body: dict[str, Any], key: str) -> list[str]:
 
 def _nominee(body: dict[str, Any]) -> dict[str, str]:
     return {"name": _text(body, "name"), "description": _text(body, "description", False)}
+
+
+def _import_edition(edition: dict[str, Any]) -> dict[str, Any]:
+    year = _optional_int(edition, "year")
+    if year is None:
+        raise ApiError(400, "Cada elemento de 'oscar_awards' necesita 'year' (numero entero).")
+    categories = edition.get("categories")
+    if not isinstance(categories, list) or not all(isinstance(c, dict) for c in categories):
+        raise ApiError(400, f"Año {year}: 'categories' debe ser una lista de objetos.")
+    return {"year": year, "categories": [_import_category(year, c) for c in categories]}
+
+
+def _import_category(year: int, category: dict[str, Any]) -> dict[str, Any]:
+    name = _text(category, "name")
+    nominees = category.get("nominees", [])
+    # Como en el archivo: textos; tambien se aceptan objetos {name, description}
+    if not isinstance(nominees, list) or not all(isinstance(n, (str, dict)) for n in nominees):
+        raise ApiError(400, f"Año {year}, {name}: 'nominees' debe ser una lista de nombres.")
+    return {
+        "name": name,
+        "votingMethod": _optional_text(category, "votingMethod"),
+        "nominees": [_nominee({"name": n} if isinstance(n, str) else n) for n in nominees],
+    }
 
 
 def _nominee_list(body: dict[str, Any]) -> list[dict[str, str]]:
@@ -230,15 +261,33 @@ def create_category() -> Response:
     data = {
         "name": _text(body, "name"),
         "votingMethod": _text(body, "votingMethod"),
+        # año de la premiacion (por defecto el actual); el id combina nombre y año
+        "year": _optional_int(body, "year"),
         "nominees": _nominee_list(body) if "nominees" in body else [],
     }
     return _json(get_service().create_category(_current_user(), data), 201)
 
 
+@app.post("/admin/catalog/import")
+def import_catalog() -> Response:
+    # Mismo formato que docs/Premios Oscar 2015-2024.json; se ignoran edition y winner
+    body = _body()
+    editions = body.get("oscar_awards")
+    if not isinstance(editions, list) or not all(isinstance(e, dict) for e in editions):
+        raise ApiError(400, "El campo 'oscar_awards' debe ser una lista de años con categorias.")
+    data = [_import_edition(edition) for edition in editions]
+    return _json(get_service().import_catalog(_current_user(), data), 201)
+
+
 @app.patch("/admin/categories/<category_id>")
 def update_category(category_id: str) -> Response:
     body = _body()
-    data = {"name": _text(body, "name"), "votingMethod": _text(body, "votingMethod")}
+    data = {
+        "name": _text(body, "name"),
+        "votingMethod": _text(body, "votingMethod"),
+        # opcional; si viene debe coincidir, el año no se cambia
+        "year": _optional_int(body, "year"),
+    }
     return _json(get_service().update_category(_current_user(), category_id, data))
 
 

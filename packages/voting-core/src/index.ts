@@ -18,9 +18,13 @@ export {
 } from './election'
 export type { NewElectionInput } from './election'
 export {
+  MAX_CATEGORY_YEAR,
+  MIN_CATEGORY_YEAR,
+  categoryId,
   isCategoryLocked,
   slugId,
   validateCategoryName,
+  validateCategoryYear,
   validateNomineeName,
 } from './catalog'
 export type { NewCategoryInput, NomineeInput } from './catalog'

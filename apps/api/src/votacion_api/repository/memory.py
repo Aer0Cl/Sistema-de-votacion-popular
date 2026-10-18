@@ -57,6 +57,12 @@ class MemoryRepository:
     def put_nominee(self, nominee: Item) -> None:
         self.nominees[nominee["id"]] = copy.deepcopy(nominee)
 
+    def put_catalog(self, categories: list[Item], nominees: list[Item]) -> None:
+        for category in categories:
+            self.put_category(category)
+        for nominee in nominees:
+            self.put_nominee(nominee)
+
     def list_elections(self) -> list[Item]:
         return copy.deepcopy(list(self.elections.values()))
 

@@ -1,3 +1,4 @@
+import { categoryId } from '@votacion/voting-core'
 import type {
   Answer,
   Category,
@@ -17,32 +18,35 @@ export type SeedData = {
   answerHistory: Answer[]
 }
 
-// Catalogo de docs/Categorias Oscar.txt
-const categoryNames: [string, string][] = [
-  ['mejor-pelicula', 'Mejor película'],
-  ['mejor-direccion', 'Mejor dirección'],
-  ['mejor-actor', 'Mejor actor'],
-  ['mejor-actriz', 'Mejor actriz'],
-  ['mejor-actor-reparto', 'Mejor actor de reparto'],
-  ['mejor-actriz-reparto', 'Mejor actriz de reparto'],
-  ['mejor-guion-original', 'Mejor guion original'],
-  ['mejor-guion-adaptado', 'Mejor guion adaptado'],
-  ['mejor-pelicula-animacion', 'Mejor película de animación'],
-  ['mejor-pelicula-internacional', 'Mejor película internacional'],
-  ['mejor-casting', 'Mejor dirección de casting'],
-  ['mejor-documental', 'Mejor documental'],
-  ['mejor-corto-documental', 'Mejor cortometraje documental'],
-  ['mejor-corto-accion-real', 'Mejor cortometraje de acción real'],
-  ['mejor-corto-animacion', 'Mejor cortometraje de animación'],
-  ['mejor-banda-sonora', 'Mejor banda sonora original'],
-  ['mejor-cancion', 'Mejor canción original'],
-  ['mejor-sonido', 'Mejor sonido'],
-  ['mejor-diseno-produccion', 'Mejor diseño de producción'],
-  ['mejor-fotografia', 'Mejor fotografía'],
-  ['mejor-maquillaje', 'Mejor maquillaje y peluquería'],
-  ['mejor-vestuario', 'Mejor diseño de vestuario'],
-  ['mejor-montaje', 'Mejor montaje / edición'],
-  ['mejores-efectos-visuales', 'Mejores efectos visuales'],
+// Catalogo de docs/Categorias Oscar.txt (edicion 2026: incluye la nueva categoria de casting)
+export const SEED_YEAR = 2026
+const BEST_PICTURE = 'Mejor película'
+
+const categoryNames = [
+  'Mejor película',
+  'Mejor dirección',
+  'Mejor actor',
+  'Mejor actriz',
+  'Mejor actor de reparto',
+  'Mejor actriz de reparto',
+  'Mejor guion original',
+  'Mejor guion adaptado',
+  'Mejor película de animación',
+  'Mejor película internacional',
+  'Mejor dirección de casting',
+  'Mejor documental',
+  'Mejor cortometraje documental',
+  'Mejor cortometraje de acción real',
+  'Mejor cortometraje de animación',
+  'Mejor banda sonora original',
+  'Mejor canción original',
+  'Mejor sonido',
+  'Mejor diseño de producción',
+  'Mejor fotografía',
+  'Mejor maquillaje y peluquería',
+  'Mejor diseño de vestuario',
+  'Mejor montaje / edición',
+  'Mejores efectos visuales',
 ]
 
 const bestPictureNominees = [
@@ -59,14 +63,31 @@ const DAY = 24 * HOUR
 export function createSeed(now: Date): SeedData {
   const at = (offset: number) => new Date(now.getTime() + offset).toISOString()
 
-  const categories: Category[] = categoryNames.map(([id, name]) => ({
-    id,
-    name,
-    votingMethod: id === 'mejor-pelicula' ? 'ranked' : 'plurality',
-  }))
+  // Ids con nombre y año, igual que los que genera la API: "mejor-pelicula-2026"
+  const taken = new Set<string>()
+  const categories: Category[] = categoryNames.map((name) => {
+    const id = categoryId(name, SEED_YEAR, taken)
+    taken.add(id)
+    return {
+      id,
+      name,
+      votingMethod: name === BEST_PICTURE ? 'ranked' : 'plurality',
+      year: SEED_YEAR,
+    }
+  })
+  const idOf = (name: string): string => {
+    const category = categories.find((candidate) => candidate.name === name)
+    if (!category) {
+      throw new Error(`Categoria desconocida en el seed: ${name}`)
+    }
+    return category.id
+  }
+  const picture = idOf(BEST_PICTURE)
+  const director = idOf('Mejor dirección')
+  const actor = idOf('Mejor actor')
 
   const nominees: Nominee[] = categories.flatMap((category) =>
-    category.id === 'mejor-pelicula'
+    category.id === picture
       ? bestPictureNominees.map((name, index) => ({
           id: `${category.id}-${index + 1}`,
           categoryId: category.id,
@@ -102,10 +123,10 @@ export function createSeed(now: Date): SeedData {
       name: 'Familia',
       closesAt: at(3 * DAY),
       categoryIds: [
-        'mejor-pelicula',
-        'mejor-actor',
-        'mejor-actriz',
-        'mejor-pelicula-animacion',
+        picture,
+        actor,
+        idOf('Mejor actriz'),
+        idOf('Mejor película de animación'),
       ],
       adminIds: ['u-alice'],
       createdAt: at(-5 * DAY),
@@ -115,7 +136,7 @@ export function createSeed(now: Date): SeedData {
       code: 'PREVIA26',
       name: 'Votación previa',
       closesAt: at(-1 * DAY),
-      categoryIds: ['mejor-pelicula', 'mejor-direccion', 'mejor-actor'],
+      categoryIds: [picture, director, actor],
       adminIds: ['u-alice'],
       createdAt: at(-10 * DAY),
     },
@@ -130,7 +151,7 @@ export function createSeed(now: Date): SeedData {
     ...join('e-cerrada', ['u-bob', 'u-carla', 'u-diego']),
   ]
 
-  const picture = (order: number[]) => order.map((n) => `mejor-pelicula-${n}`)
+  const ranking = (order: number[]) => order.map((n) => `${picture}-${n}`)
   const answer = (
     userId: string,
     categoryId: string,
@@ -139,15 +160,15 @@ export function createSeed(now: Date): SeedData {
   ): Answer => ({ userId, categoryId, updatedAt: at(offset), ...choice })
 
   const answerHistory: Answer[] = [
-    answer('u-bob', 'mejor-pelicula', -3 * DAY, { ranking: picture([2, 1, 3, 4, 5]) }),
-    answer('u-bob', 'mejor-actor', -3 * DAY, { nomineeId: 'mejor-actor-2' }),
-    answer('u-carla', 'mejor-pelicula', -3 * DAY, { ranking: picture([1, 2, 5, 3, 4]) }),
-    answer('u-carla', 'mejor-direccion', -3 * DAY, { nomineeId: 'mejor-direccion-1' }),
-    answer('u-carla', 'mejor-actor', -3 * DAY, { nomineeId: 'mejor-actor-2' }),
-    answer('u-diego', 'mejor-pelicula', -2 * DAY, { ranking: picture([5, 1, 2, 3, 4]) }),
-    answer('u-diego', 'mejor-actor', -2 * DAY, { nomineeId: 'mejor-actor-4' }),
+    answer('u-bob', picture, -3 * DAY, { ranking: ranking([2, 1, 3, 4, 5]) }),
+    answer('u-bob', actor, -3 * DAY, { nomineeId: `${actor}-2` }),
+    answer('u-carla', picture, -3 * DAY, { ranking: ranking([1, 2, 5, 3, 4]) }),
+    answer('u-carla', director, -3 * DAY, { nomineeId: `${director}-1` }),
+    answer('u-carla', actor, -3 * DAY, { nomineeId: `${actor}-2` }),
+    answer('u-diego', picture, -2 * DAY, { ranking: ranking([5, 1, 2, 3, 4]) }),
+    answer('u-diego', actor, -2 * DAY, { nomineeId: `${actor}-4` }),
     // Bob cambio su ranking despues del cierre de PREVIA26: esa votacion conserva el anterior
-    answer('u-bob', 'mejor-pelicula', -2 * HOUR, { ranking: picture([3, 2, 1, 4, 5]) }),
+    answer('u-bob', picture, -2 * HOUR, { ranking: ranking([3, 2, 1, 4, 5]) }),
   ]
 
   return { users, categories, nominees, elections, memberships, answerHistory }

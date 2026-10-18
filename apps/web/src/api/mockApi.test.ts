@@ -14,9 +14,9 @@ function createSeed(): SeedData {
       { id: 'ana', displayName: 'Ana', role: 'voter' },
     ],
     categories: [
-      { id: 'pelicula', name: 'Mejor pelicula', votingMethod: 'ranked' },
-      { id: 'actor', name: 'Mejor actor', votingMethod: 'plurality' },
-      { id: 'actriz', name: 'Mejor actriz', votingMethod: 'plurality' },
+      { id: 'pelicula', name: 'Mejor pelicula', votingMethod: 'ranked', year: 2027 },
+      { id: 'actor', name: 'Mejor actor', votingMethod: 'plurality', year: 2027 },
+      { id: 'actriz', name: 'Mejor actriz', votingMethod: 'plurality', year: 2027 },
     ],
     nominees: [
       ...picture.map((id) => ({ id, categoryId: 'pelicula', name: id })),
@@ -222,7 +222,13 @@ describe('mockApi', () => {
         name: 'Mejor sonido',
         votingMethod: 'plurality',
       })
-      expect(created).toMatchObject({ id: 'mejor-sonido', locked: false, nominees: [] })
+      // Sin año se usa el actual (el reloj del test esta en 2027)
+      expect(created).toMatchObject({
+        id: 'mejor-sonido-2027',
+        year: 2027,
+        locked: false,
+        nominees: [],
+      })
 
       await api.addNominee(created.id, { name: 'Dune' })
       const updated = await api.addNominee(created.id, {
@@ -237,9 +243,46 @@ describe('mockApi', () => {
       const election = await api.createElection({
         name: 'Con sonido',
         closesAt: new Date(start.getTime() + DAY).toISOString(),
-        categoryIds: ['actor', 'mejor-sonido'],
+        categoryIds: ['actor', created.id],
       })
-      expect(election.categoryIds).toContain('mejor-sonido')
+      expect(election.categoryIds).toContain('mejor-sonido-2027')
+    })
+
+    it('arma el id con el nombre y el año, y no repite nombres en el mismo año', async () => {
+      const { api } = setup()
+      api.setUser('admin')
+
+      const of2026 = await api.createCategory({
+        name: 'Mejor sonido',
+        votingMethod: 'plurality',
+        year: 2026,
+      })
+      const of2027 = await api.createCategory({
+        name: 'Mejor sonido',
+        votingMethod: 'plurality',
+        year: 2027,
+      })
+      expect([of2026.id, of2027.id]).toEqual(['mejor-sonido-2026', 'mejor-sonido-2027'])
+
+      await expect(
+        api.createCategory({ name: 'MEJOR SONIDO', votingMethod: 'ranked', year: 2026 }),
+      ).rejects.toMatchObject({ status: 400 })
+      await expect(
+        api.createCategory({ name: 'Otra', votingMethod: 'ranked', year: 1800 }),
+      ).rejects.toMatchObject({ status: 400 })
+      await expect(
+        api.updateCategory(of2026.id, {
+          name: 'Mejor sonido',
+          votingMethod: 'plurality',
+          year: 2028,
+        }),
+      ).rejects.toMatchObject({ status: 400 })
+
+      const renamed = await api.updateCategory(of2026.id, {
+        name: 'Mejor mezcla de sonido',
+        votingMethod: 'plurality',
+      })
+      expect(renamed).toMatchObject({ id: 'mejor-sonido-2026', year: 2026 })
     })
 
     it('no permite crear votaciones con categorias de menos de 2 nominados', async () => {

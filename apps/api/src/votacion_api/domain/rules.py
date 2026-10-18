@@ -19,12 +19,20 @@ MIN_NOMINEES = 2
 # Por ahora los rankings deben ordenar a todos los nominados
 REQUIRE_COMPLETE_RANKING = True
 VOTING_METHODS = ("plurality", "ranked")
+# Año de una categoria (edicion de la premiacion); forma parte de su id
+MIN_CATEGORY_YEAR = 1900
+MAX_CATEGORY_YEAR = 2100
 USER_ROLES = ("voter", "admin")
 # Ids propios (u-alice) o el "sub" de Cognito cuando se integre (uuid en minusculas)
 USER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 MAX_DISPLAY_NAME = 60
 # Nominados por solicitud: acota el tiempo de la Lambda (cada uno es una escritura)
 MAX_NOMINEES_PER_REQUEST = 50
+# Carga masiva del catalogo (POST /admin/catalog/import): limites por solicitud
+MAX_IMPORT_CATEGORIES = 100
+MAX_IMPORT_NOMINEES = 1000
+# Categorias que se votan por ranking si la carga no indica votingMethod
+RANKED_BY_DEFAULT = ("best-picture", "mejor-pelicula")
 
 
 def normalize_election_code(code: str) -> str:
@@ -173,13 +181,47 @@ def _same_name(a: str, b: str) -> bool:
 
 
 def validate_category_name(
-    name: str, catalog: list[dict[str, Any]], exclude_id: str | None = None
+    name: str,
+    year: int | None,
+    catalog: list[dict[str, Any]],
+    exclude_id: str | None = None,
 ) -> str | None:
+    """El nombre no se repite dentro de un mismo año (puede existir en 2025 y en 2026)."""
     if not name.strip():
         return "La categoria necesita un nombre."
-    if any(c["id"] != exclude_id and _same_name(c["name"], name) for c in catalog):
-        return "Ya existe una categoria con ese nombre."
+    if any(
+        c["id"] != exclude_id and category_year(c) == year and _same_name(c["name"], name)
+        for c in catalog
+    ):
+        return "Ya existe una categoria con ese nombre en ese año."
     return None
+
+
+def category_year(category: dict[str, Any]) -> int | None:
+    """Año de la categoria; None en las creadas antes de que existiera."""
+    year = category.get("year")
+    # DynamoDB devuelve los numeros como Decimal
+    return None if year is None else int(year)
+
+
+def validate_category_year(year: Any) -> str | None:
+    if (
+        isinstance(year, bool)
+        or not isinstance(year, int)
+        or not MIN_CATEGORY_YEAR <= year <= MAX_CATEGORY_YEAR
+    ):
+        return f"El año debe ser un numero entero entre {MIN_CATEGORY_YEAR} y {MAX_CATEGORY_YEAR}."
+    return None
+
+
+def default_voting_method(name: str) -> str:
+    """Mejor pelicula (Best Picture) se decide por ranking; el resto, por mayoria simple."""
+    return "ranked" if slug_id(name, set()) in RANKED_BY_DEFAULT else "plurality"
+
+
+def category_id(name: str, year: int, taken: set[str]) -> str:
+    """Id de una categoria nueva: "Mejor pelicula" de 2026 -> "mejor-pelicula-2026"."""
+    return slug_id(f"{name} {year}", taken)
 
 
 def validate_nominee_name(

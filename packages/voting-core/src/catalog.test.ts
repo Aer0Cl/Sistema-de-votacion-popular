@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
+  categoryId,
   isCategoryLocked,
   slugId,
   validateCategoryName,
+  validateCategoryYear,
   validateNomineeName,
 } from './catalog'
 import type { Category, Nominee } from './types'
 
 const catalog: Category[] = [
-  { id: 'mejor-actor', name: 'Mejor actor', votingMethod: 'plurality' },
-  { id: 'mejor-actriz', name: 'Mejor actriz', votingMethod: 'plurality' },
+  { id: 'mejor-actor-2026', name: 'Mejor actor', votingMethod: 'plurality', year: 2026 },
+  {
+    id: 'mejor-actriz-2026',
+    name: 'Mejor actriz',
+    votingMethod: 'plurality',
+    year: 2026,
+  },
 ]
 
 const nominees: Nominee[] = [
@@ -27,14 +34,38 @@ describe('isCategoryLocked', () => {
 })
 
 describe('validateCategoryName', () => {
-  it('rechaza nombres vacios o repetidos sin distinguir mayusculas', () => {
-    expect(validateCategoryName('  ', catalog)).not.toBeNull()
-    expect(validateCategoryName(' MEJOR ACTOR ', catalog)).not.toBeNull()
-    expect(validateCategoryName('Mejor sonido', catalog)).toBeNull()
+  it('rechaza nombres vacios o repetidos en el mismo año sin distinguir mayusculas', () => {
+    expect(validateCategoryName('  ', 2026, catalog)).not.toBeNull()
+    expect(validateCategoryName(' MEJOR ACTOR ', 2026, catalog)).not.toBeNull()
+    expect(validateCategoryName('Mejor sonido', 2026, catalog)).toBeNull()
+  })
+
+  it('permite el mismo nombre en otro año', () => {
+    expect(validateCategoryName('Mejor actor', 2027, catalog)).toBeNull()
   })
 
   it('permite conservar el nombre al renombrar la misma categoria', () => {
-    expect(validateCategoryName('Mejor actor', catalog, 'mejor-actor')).toBeNull()
+    expect(
+      validateCategoryName('Mejor actor', 2026, catalog, 'mejor-actor-2026'),
+    ).toBeNull()
+  })
+})
+
+describe('validateCategoryYear', () => {
+  it('acepta años enteros dentro del rango', () => {
+    expect(validateCategoryYear(2026)).toBeNull()
+    for (const year of [1899, 2101, 2026.5, '2026', undefined]) {
+      expect(validateCategoryYear(year)).not.toBeNull()
+    }
+  })
+})
+
+describe('categoryId', () => {
+  it('combina el nombre y el año', () => {
+    expect(categoryId('Mejor película', 2026, new Set())).toBe('mejor-pelicula-2026')
+    expect(categoryId('Mejor película', 2026, new Set(['mejor-pelicula-2026']))).toBe(
+      'mejor-pelicula-2026-2',
+    )
   })
 })
 

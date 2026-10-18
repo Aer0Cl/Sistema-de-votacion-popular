@@ -164,12 +164,12 @@ class TestCatalogo:
         created = service.create_category(
             "admin", {"name": "Mejor sonido", "votingMethod": "plurality"}
         )
-        assert created["id"] == "mejor-sonido"
+        assert created["id"] == "mejor-sonido-2027"
         assert created["locked"] is False
 
-        service.add_nominee("admin", "mejor-sonido", {"name": "Dune", "description": ""})
+        service.add_nominee("admin", "mejor-sonido-2027", {"name": "Dune", "description": ""})
         updated = service.add_nominee(
-            "admin", "mejor-sonido", {"name": "Oppenheimer", "description": "2023"}
+            "admin", "mejor-sonido-2027", {"name": "Oppenheimer", "description": "2023"}
         )
         assert [n["name"] for n in updated["nominees"]] == ["Dune", "Oppenheimer"]
         assert updated["nominees"][1]["description"] == "2023"
@@ -197,11 +197,11 @@ class TestCatalogo:
 
     def test_eliminar_categoria_sin_uso(self, service):
         service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "plurality"})
-        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
-        service.delete_category("admin", "mejor-sonido")
+        service.add_nominee("admin", "mejor-sonido-2027", {"name": "Dune"})
+        service.delete_category("admin", "mejor-sonido-2027")
 
-        assert "mejor-sonido" not in [c["id"] for c in service.list_catalog("admin")]
-        assert service.repo.list_nominees("mejor-sonido") == []
+        assert "mejor-sonido-2027" not in [c["id"] for c in service.list_catalog("admin")]
+        assert service.repo.list_nominees("mejor-sonido-2027") == []
 
     def test_nombres_repetidos_y_metodo_invalido(self, service):
         repeated = lambda: service.create_category(  # noqa: E731
@@ -223,12 +223,12 @@ class TestCatalogo:
                 "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}],
             },
         )
-        assert created["id"] == "mejor-sonido"
+        assert created["id"] == "mejor-sonido-2027"
         assert [n["name"] for n in created["nominees"]] == ["Dune", "Oppenheimer"]
         assert created["nominees"][0]["description"] == "2021"
         assert [n["id"] for n in created["nominees"]] == [
-            "mejor-sonido-dune",
-            "mejor-sonido-oppenheimer",
+            "mejor-sonido-2027-dune",
+            "mejor-sonido-2027-oppenheimer",
         ]
 
     def test_nominados_invalidos_no_crean_la_categoria(self, service):
@@ -241,38 +241,84 @@ class TestCatalogo:
             },
         )
         assert status_of(repeated) == 400
-        assert service.repo.get_category("mejor-sonido") is None
-        assert service.repo.list_nominees("mejor-sonido") == []
+        assert service.repo.get_category("mejor-sonido-2027") is None
+        assert service.repo.list_nominees("mejor-sonido-2027") == []
 
     def test_asignar_varios_nominados(self, service):
         service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "ranked"})
-        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
+        service.add_nominee("admin", "mejor-sonido-2027", {"name": "Dune"})
         updated = service.add_nominees(
-            "admin", "mejor-sonido", [{"name": "Oppenheimer"}, {"name": "Barbie"}]
+            "admin", "mejor-sonido-2027", [{"name": "Oppenheimer"}, {"name": "Barbie"}]
         )
         assert [n["name"] for n in updated["nominees"]] == ["Dune", "Oppenheimer", "Barbie"]
 
     def test_asignar_nominados_es_todo_o_nada(self, service):
         service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "plurality"})
-        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
+        service.add_nominee("admin", "mejor-sonido-2027", {"name": "Dune"})
         batch = [{"name": "Barbie"}, {"name": "DUNE"}]
-        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", batch)) == 400
-        assert [n["name"] for n in service.repo.list_nominees("mejor-sonido")] == ["Dune"]
+        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido-2027", batch)) == 400
+        assert [n["name"] for n in service.repo.list_nominees("mejor-sonido-2027")] == ["Dune"]
 
-        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", [])) == 400
+        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido-2027", [])) == 400
         too_many = [{"name": f"N{i}"} for i in range(51)]
-        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", too_many)) == 400
+        assert (
+            status_of(lambda: service.add_nominees("admin", "mejor-sonido-2027", too_many)) == 400
+        )
         assert status_of(lambda: service.add_nominees("admin", "actor", [{"name": "a3"}])) == 409
-        assert status_of(lambda: service.add_nominees("ana", "mejor-sonido", batch)) == 403
+        assert status_of(lambda: service.add_nominees("ana", "mejor-sonido-2027", batch)) == 403
         assert status_of(lambda: service.add_nominees("admin", "nada", [{"name": "x"}])) == 404
+
+    def test_id_con_nombre_y_anio(self, service):
+        # Sin año se usa el actual (el reloj del test esta en 2027)
+        default = service.create_category(
+            "admin", {"name": "Mejor sonido", "votingMethod": "plurality"}
+        )
+        assert (default["id"], default["year"]) == ("mejor-sonido-2027", 2027)
+
+        other = service.create_category(
+            "admin", {"name": "Mejor sonido", "votingMethod": "plurality", "year": 2026}
+        )
+        assert (other["id"], other["year"]) == ("mejor-sonido-2026", 2026)
+        assert service.repo.get_category("mejor-sonido-2026")["year"] == 2026
+
+        repeated = lambda: service.create_category(  # noqa: E731
+            "admin", {"name": "MEJOR SONIDO", "votingMethod": "ranked", "year": 2026}
+        )
+        assert status_of(repeated) == 400
+        bad_year = lambda: service.create_category(  # noqa: E731
+            "admin", {"name": "Otra", "votingMethod": "ranked", "year": 1800}
+        )
+        assert status_of(bad_year) == 400
+
+    def test_el_anio_no_se_cambia(self, service):
+        service.create_category(
+            "admin", {"name": "Mejor sonido", "votingMethod": "plurality", "year": 2026}
+        )
+        change = lambda: service.update_category(  # noqa: E731
+            "admin",
+            "mejor-sonido-2026",
+            {"name": "Mejor sonido", "votingMethod": "plurality", "year": 2027},
+        )
+        assert status_of(change) == 400
+
+        renamed = service.update_category(
+            "admin",
+            "mejor-sonido-2026",
+            {"name": "Mejor mezcla de sonido", "votingMethod": "plurality", "year": 2026},
+        )
+        assert (renamed["id"], renamed["name"], renamed["year"]) == (
+            "mejor-sonido-2026",
+            "Mejor mezcla de sonido",
+            2026,
+        )
 
     def test_votacion_exige_dos_nominados(self, service):
         service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "plurality"})
-        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
+        service.add_nominee("admin", "mejor-sonido-2027", {"name": "Dune"})
         data = {
             "name": "X",
             "closesAt": to_iso(START + DAY),
-            "categoryIds": ["actor", "mejor-sonido"],
+            "categoryIds": ["actor", "mejor-sonido-2027"],
         }
         assert status_of(lambda: service.create_election("admin", data)) == 400
 
@@ -344,3 +390,107 @@ class TestTablaDeUsuarios:
         assert repo.create_user({"id": "eva", "displayName": "Eva", "role": "voter"})
         assert not repo.create_user({"id": "eva", "displayName": "Otra", "role": "admin"})
         assert repo.get_user("eva")["displayName"] == "Eva"
+
+
+def oscar_editions():
+    """Mismo formato que la carga masiva, ya interpretado por la ruta HTTP."""
+    return [
+        {
+            "year": 2024,
+            "categories": [
+                {
+                    "name": "Best Picture",
+                    "votingMethod": None,
+                    "nominees": [{"name": "Barbie"}, {"name": "Oppenheimer"}, {"name": "Maestro"}],
+                },
+                {
+                    "name": "Best Actor",
+                    "votingMethod": None,
+                    "nominees": [{"name": "Cillian Murphy"}, {"name": "Paul Giamatti"}],
+                },
+            ],
+        },
+        {
+            "year": 2023,
+            "categories": [
+                {"name": "Best Picture", "votingMethod": None, "nominees": [{"name": "Elvis"}]},
+                {"name": "Best Sound", "votingMethod": "ranked", "nominees": []},
+            ],
+        },
+    ]
+
+
+class TestCargaMasiva:
+    def test_carga_categorias_con_y_sin_nominados(self, service):
+        result = service.import_catalog("admin", oscar_editions())
+        assert (result["createdCategories"], result["createdNominees"]) == (4, 6)
+        assert [c["id"] for c in result["categories"]] == [
+            "best-picture-2024",
+            "best-actor-2024",
+            "best-picture-2023",
+            "best-sound-2023",
+        ]
+
+        catalog = {c["id"]: c for c in service.list_catalog("admin")}
+        picture = catalog["best-picture-2024"]
+        assert (picture["year"], picture["votingMethod"]) == (2024, "ranked")
+        assert [n["name"] for n in picture["nominees"]] == ["Barbie", "Oppenheimer", "Maestro"]
+        assert catalog["best-actor-2024"]["votingMethod"] == "plurality"
+        assert catalog["best-sound-2023"]["votingMethod"] == "ranked"  # indicado en la carga
+        assert catalog["best-sound-2023"]["nominees"] == []
+
+    def test_lo_cargado_sirve_para_votar(self, service):
+        service.import_catalog("admin", oscar_editions())
+        data = {
+            "name": "Oscar 2024",
+            "closesAt": to_iso(START + DAY),
+            "categoryIds": ["best-picture-2024", "best-actor-2024"],
+        }
+        assert service.create_election("admin", data)["categoryIds"] == data["categoryIds"]
+
+    def test_categoria_existente_no_carga_nada(self, service):
+        service.create_category(
+            "admin", {"name": "best actor", "votingMethod": "plurality", "year": 2024}
+        )
+        with pytest.raises(ApiError) as error:
+            service.import_catalog("admin", oscar_editions())
+        assert error.value.status == 409
+        assert "Best Actor (2024)" in error.value.message
+        assert service.repo.get_category("best-picture-2024") is None
+
+    @pytest.mark.parametrize(
+        ("change", "message"),
+        [
+            (lambda e: e[0]["categories"].append(dict(e[0]["categories"][0])), "categoria 3"),
+            (
+                lambda e: e[0]["categories"][1]["nominees"].append({"name": "paul giamatti"}),
+                "Best Actor",
+            ),
+            (lambda e: e[1].update(year=1800), "Año 1800"),
+            (lambda e: e[1]["categories"][0].update(votingMethod="borda"), "metodo"),
+            (lambda e: e[0]["categories"][0].update(name="  "), "nombre"),
+        ],
+    )
+    def test_datos_invalidos_no_cargan_nada(self, service, change, message):
+        editions = oscar_editions()
+        change(editions)
+        with pytest.raises(ApiError) as error:
+            service.import_catalog("admin", editions)
+        assert error.value.status == 400
+        assert message in error.value.message
+        assert service.repo.get_category("best-picture-2024") is None
+        assert service.repo.list_nominees("best-picture-2024") == []
+
+    def test_limites_y_permisos(self, service):
+        empty = [{"year": 2024, "categories": []}]
+        assert status_of(lambda: service.import_catalog("admin", empty)) == 400
+        many = [
+            {
+                "year": 2024,
+                "categories": [
+                    {"name": f"C{i}", "votingMethod": None, "nominees": []} for i in range(101)
+                ],
+            }
+        ]
+        assert status_of(lambda: service.import_catalog("admin", many)) == 400
+        assert status_of(lambda: service.import_catalog("ana", oscar_editions())) == 403
