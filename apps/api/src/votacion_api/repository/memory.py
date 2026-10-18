@@ -3,7 +3,7 @@
 import copy
 
 from ..domain.rules import snapshot_answers
-from . import Item
+from . import Item, user_item
 
 
 class MemoryRepository:
@@ -24,7 +24,7 @@ class MemoryRepository:
         return copy.deepcopy(list(self.users.values()))
 
     def put_user(self, user: Item) -> None:
-        self.users[user["id"]] = copy.deepcopy(user)
+        self.users[user["id"]] = user_item(user)
 
     def create_user(self, user: Item) -> bool:
         if user["id"] in self.users:

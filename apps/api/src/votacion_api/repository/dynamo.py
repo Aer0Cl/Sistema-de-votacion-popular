@@ -1,7 +1,7 @@
 """Repositorio sobre DynamoDB. Los nombres de tabla llegan por variables de entorno (CDK).
 
 Claves (ver infra/cdk/lib/data-stack.ts):
-  users          id
+  users          id                    atributos: displayName (nombre), role (voter | admin)
   categories     id
   nominees       id                    GSI byCategory: categoryId + createdAt
   elections      code
@@ -19,10 +19,17 @@ from typing import Any
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
-from . import Item
+from . import USER_ATTRIBUTES, Item, user_item
 
 # Atributos que solo existen para las claves y no forman parte de la respuesta
 _ANSWER_KEY_FIELDS = ("userCategory", "version", "electionCode")
+
+# Lecturas de users con solo sus atributos; "role" es palabra reservada de DynamoDB, por eso
+# todos van con alias (#id, #displayName, #role)
+_USER_PROJECTION = {
+    "ProjectionExpression": ", ".join(f"#{name}" for name in USER_ATTRIBUTES),
+    "ExpressionAttributeNames": {f"#{name}": name for name in USER_ATTRIBUTES},
+}
 
 
 def _user_category(user_id: str, category_id: str) -> str:
@@ -63,18 +70,18 @@ class DynamoRepository:
     # Usuarios ------------------------------------------------------------------------
 
     def get_user(self, user_id: str) -> Item | None:
-        return self._tables["users"].get_item(Key={"id": user_id}).get("Item")
+        return self._tables["users"].get_item(Key={"id": user_id}, **_USER_PROJECTION).get("Item")
 
     def list_users(self) -> list[Item]:
-        return list(self._items("scan", "users"))
+        return list(self._items("scan", "users", **_USER_PROJECTION))
 
     def put_user(self, user: Item) -> None:
-        self._tables["users"].put_item(Item=user)
+        self._tables["users"].put_item(Item=user_item(user))
 
     def create_user(self, user: Item) -> bool:
         table = self._tables["users"]
         try:
-            table.put_item(Item=user, ConditionExpression=Attr("id").not_exists())
+            table.put_item(Item=user_item(user), ConditionExpression=Attr("id").not_exists())
         except table.meta.client.exceptions.ConditionalCheckFailedException:
             return False
         return True

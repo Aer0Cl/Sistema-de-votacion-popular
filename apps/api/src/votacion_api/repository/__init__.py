@@ -2,7 +2,22 @@
 
 from typing import Any, Protocol
 
+from ..domain.rules import USER_ROLES
+
 Item = dict[str, Any]
+
+# Atributos de la tabla users: id (clave), displayName (nombre) y role (voter | admin)
+USER_ATTRIBUTES = ("id", "displayName", "role")
+
+
+def user_item(user: Item) -> Item:
+    """Registro de usuario con solo sus atributos; falla si falta alguno o el rol no es valido."""
+    missing = [name for name in USER_ATTRIBUTES if not user.get(name)]
+    if missing:
+        raise ValueError(f"Al usuario le faltan atributos: {', '.join(missing)}.")
+    if user["role"] not in USER_ROLES:
+        raise ValueError(f"Rol de usuario no valido: {user['role']}.")
+    return {name: user[name] for name in USER_ATTRIBUTES}
 
 
 class Repository(Protocol):

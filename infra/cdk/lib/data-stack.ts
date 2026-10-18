@@ -23,6 +23,8 @@ export type TableSpec = KeySpec & {
  * y con el esquema de tests en apps/api/tests/conftest.py.
  */
 export const TABLE_SPECS = {
+  // DynamoDB solo declara la clave; cada usuario guarda ademas displayName (nombre) y role
+  // (voter | admin), que exige apps/api/src/votacion_api/repository/__init__.py (user_item)
   users: { partition: 'id', envVar: 'USERS_TABLE' },
   categories: { partition: 'id', envVar: 'CATEGORIES_TABLE' },
   nominees: {

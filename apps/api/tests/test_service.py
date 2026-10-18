@@ -316,3 +316,31 @@ class TestUsuarios:
         data = {"displayName": "Eva", "role": "admin"}
         assert status_of(lambda: service.create_user("ana", data)) == 403
         assert status_of(lambda: service.create_user("", data)) == 401
+
+
+class TestTablaDeUsuarios:
+    def test_guarda_solo_id_nombre_y_rol(self, repo):
+        repo.put_user({"id": "eva", "displayName": "Eva", "role": "admin", "email": "x@y.z"})
+        assert repo.get_user("eva") == {"id": "eva", "displayName": "Eva", "role": "admin"}
+        assert repo.list_users() == [{"id": "eva", "displayName": "Eva", "role": "admin"}]
+
+    @pytest.mark.parametrize(
+        "user",
+        [
+            {"id": "eva", "role": "voter"},
+            {"id": "eva", "displayName": "Eva"},
+            {"id": "eva", "displayName": "", "role": "voter"},
+            {"id": "eva", "displayName": "Eva", "role": "root"},
+        ],
+    )
+    def test_rechaza_usuarios_incompletos(self, repo, user):
+        with pytest.raises(ValueError):
+            repo.put_user(user)
+        with pytest.raises(ValueError):
+            repo.create_user(user)
+        assert repo.get_user("eva") is None
+
+    def test_create_user_no_sobrescribe(self, repo):
+        assert repo.create_user({"id": "eva", "displayName": "Eva", "role": "voter"})
+        assert not repo.create_user({"id": "eva", "displayName": "Otra", "role": "admin"})
+        assert repo.get_user("eva")["displayName"] == "Eva"
