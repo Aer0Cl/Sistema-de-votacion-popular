@@ -1,14 +1,19 @@
 name: CI y despliegue en AWS
 
-# Verifica cada PR y despliega en dev cada push a main. A mano (Actions > Run workflow) se
-# elige la rama en "Use workflow from" y el ambiente en la lista. Los stacks de CloudFormation
-# (Votacion-<stage>-Data, -Web y -Api) los crea CDK; el front se compila con la URL de la API
-# desplegada y se sube al bucket del stack Web.
+# Verifica cada PR y despliega en dev cada push a main o a feature/*. A mano (Actions > Run
+# workflow) se elige la rama en "Use workflow from" y el ambiente en la lista. Los stacks de
+# CloudFormation (Votacion-<stage>-Data, -Web y -Api) los crea CDK; el front se compila con la
+# URL de la API desplegada y se sube al bucket del stack Web.
+#
+# Todas las ramas comparten el mismo ambiente dev: queda desplegado el ultimo push. Las ramas
+# deben estar permitidas en el environment de GitHub (Deployment branches: main y feature/*).
 on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'feature/*'
   workflow_dispatch:
     inputs:
       environment:
@@ -128,11 +133,34 @@ jobs:
       - name: Invalidar CloudFront
         run: aws cloudfront create-invalidation --distribution-id "${{ steps.stack.outputs.distribution_id }}" --paths "/*"
 
+      # Falla el despliegue si la API recien desplegada no responde
+      - name: Probar la API
+        env:
+          API_URL: ${{ steps.stack.outputs.api_url }}
+        run: curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$API_URL/health"
+
+      # La lista sale de los decoradores @app.<metodo>("<ruta>") de app.py: siempre coincide con
+      # lo desplegado. Los parametros <id> se muestran como {id}
       - name: Resumen
+        env:
+          API_URL: ${{ steps.stack.outputs.api_url }}
+          WEB_URL: ${{ steps.stack.outputs.web_url }}
         run: |
+          endpoints=$(grep -oE '@app\.(get|post|put|patch|delete)\("[^"]+"\)' apps/api/src/votacion_api/app.py \
+            | sed -E 's/@app\.([a-z]+)\("([^"]+)"\)/\1 \2/; s/<([a-z_]+)>/{\1}/g')
+          echo "Endpoints de la API:"
+          while read -r method path; do echo "  ${method^^} $API_URL$path"; done <<< "$endpoints"
           {
             echo "### Despliegue en $STAGE"
             echo "- Rama: \`$GITHUB_REF_NAME\` (\`${GITHUB_SHA::7}\`), por $GITHUB_EVENT_NAME"
-            echo "- Front: ${{ steps.stack.outputs.web_url }}"
-            echo "- API: ${{ steps.stack.outputs.api_url }}"
+            echo "- Front: $WEB_URL"
+            echo "- API: $API_URL"
+            echo ""
+            echo "#### Endpoints de la API"
+            echo ""
+            echo "En dev el usuario va en el encabezado \`X-User-Id\` (p. ej. \`u-alice\`, admin)."
+            echo ""
+            echo "| Metodo | URL |"
+            echo "| --- | --- |"
+            while read -r method path; do echo "| ${method^^} | \`$API_URL$path\` |"; done <<< "$endpoints"
           } >> "$GITHUB_STEP_SUMMARY"

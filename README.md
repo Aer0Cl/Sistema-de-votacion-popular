@@ -133,7 +133,7 @@ cd infra/cdk && npx cdk bootstrap --cloudformation-execution-policies arn:aws:ia
 3. `aws sso login --profile votacion-dev` antes de desplegar o cargar datos.
 
 **GitHub, una vez:** en Settings > Environments crear el environment `dev`, limitar sus
-"Deployment branches" a las ramas que pueden desplegar (al menos `main`) y definir la variable
+"Deployment branches" a las ramas que pueden desplegar (`main` y `feature/*`) y definir la variable
 `AWS_DEPLOY_ROLE_ARN` con la salida `GitHubDeployRoleArn` del stack `votacion-dev-access`.
 
 Si un despliegue falla con `AccessDenied`, agregar la accion puntual a la politica que
@@ -146,14 +146,16 @@ Todos los caminos hacen lo mismo: `cdk deploy --all` (stacks Data, Web y Api), c
 con `ApiUrl` como `VITE_API_URL`, lo suben al bucket del stack Web (assets con cache larga,
 `index.html` sin cache) e invalidan CloudFront.
 
-| Como             | Cuando                                                                                                                                                                 |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Push a `main`    | Automatico: workflow `deploy-aws.yml`, despues de lint, tipos, pruebas y `cdk synth --strict`                                                                          |
-| Manual en GitHub | Actions > **CI y despliegue en AWS** > Run workflow: la rama se elige en "Use workflow from" y el ambiente en la lista. La rama debe estar permitida en el environment |
-| Local            | `npm run deploy:aws` con la sesion de `votacion-dev` (`scripts/deploy-aws.ps1 -AwsProfile <perfil> -Stage <stage>`)                                                    |
+| Como                          | Cuando                                                                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push a `main` o a `feature/*` | Automatico en dev: workflow `deploy-aws.yml`, despues de lint, tipos, pruebas y `cdk synth --strict`. Todas las ramas comparten dev: queda el ultimo push              |
+| Manual en GitHub              | Actions > **CI y despliegue en AWS** > Run workflow: la rama se elige en "Use workflow from" y el ambiente en la lista. La rama debe estar permitida en el environment |
+| Local                         | `npm run deploy:aws` con la sesion de `votacion-dev` (`scripts/deploy-aws.ps1 -AwsProfile <perfil> -Stage <stage>`)                                                    |
 
-Cada PR a `main` corre las verificaciones sin desplegar. El resumen de cada despliegue muestra la
-rama, el commit y las URLs del front y la API.
+Cada PR a `main` corre las verificaciones sin desplegar. Despues de desplegar, el workflow prueba
+`GET /health` (si falla, el despliegue falla) y el resumen muestra la rama, el commit, las URLs
+del front y la API, y la tabla de endpoints con su URL completa. La tabla sale de las rutas de
+`apps/api/src/votacion_api/app.py`, asi que incluye cada endpoint nuevo sin tocar el workflow.
 
 **Invalidar la cache del front sin desplegar:** Actions > **Invalidar cache del front** > Run
 workflow, eligiendo el ambiente y las rutas (por defecto `/*`). Espera a que la invalidacion
