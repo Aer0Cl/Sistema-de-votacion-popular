@@ -42,3 +42,5 @@ cdk-outputs.json
 
 # Documentacion local (no se versiona)
 docs/
+# Request Collection
+apps/api/bruno
