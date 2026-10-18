@@ -24,3 +24,15 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+
+# CDK
+cdk.out
+
+# Python
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+
+# Variables locales del front
+.env.local

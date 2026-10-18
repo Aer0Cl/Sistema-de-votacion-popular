@@ -24,8 +24,8 @@ import { ApiError } from './types'
 import type {
   CatalogCategory,
   CategoryWithNominees,
+  DevVotingApi,
   ElectionSummary,
-  VotingApi,
 } from './types'
 
 type MockApiOptions = {
@@ -36,10 +36,7 @@ type MockApiOptions = {
   delayMs?: number
 }
 
-export type MockVotingApi = VotingApi & {
-  setUser(userId: string): void
-  listUsers(): Promise<SeedData['users']>
-}
+export type MockVotingApi = DevVotingApi
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 

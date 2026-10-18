@@ -2,12 +2,10 @@
   "name": "@votacion/api",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
+  "description": "Lambda en Python; npm solo delega en uv para integrarse con los scripts de la raiz",
   "scripts": {
-    "check": "tsc --noEmit",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@votacion/voting-core": "*"
+    "check": "uv run --frozen ruff check src tests && uv run --frozen ruff format --check src tests",
+    "test": "uv run --frozen pytest -q",
+    "format": "uv run --frozen ruff format src tests"
   }
 }

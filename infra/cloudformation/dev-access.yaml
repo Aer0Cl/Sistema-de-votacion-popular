@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Acceso de desarrolladores al ambiente de votacion popular mediante IAM Identity Center
+  con permisos minimos: grupo, permission set y asignacion a la cuenta; politica de ejecucion
+  acotada para CloudFormation (cdk bootstrap) y limite de permisos para los roles que crea CDK.
+  La despliega un administrador una vez, antes de cdk bootstrap.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: >-
+      Desarrollador (Identity Center, grupo votacion-<stage>-developers) -> permission set ->
+      solo puede asumir los roles de cdk bootstrap. El rol de ejecucion de CloudFormation usa
+      CdkExecutionPolicy en vez de AdministratorAccess, y todo rol que cree CDK debe llevar
+      AppPermissionsBoundary (lo aplica infra/cdk/lib/app.ts).
+    must:
+      - Desplegar este stack con credenciales de administrador, no con los roles de CDK.
+      - Despues de crearlo, ejecutar cdk bootstrap con --cloudformation-execution-policies apuntando a CdkExecutionPolicy.
+      - Los nombres votacion-<stage>-* y Votacion-<stage>-* deben coincidir con infra/cdk (config.ts y los ids de stack).
+    ref:
+      - README.md (seccion Acceso al ambiente dev)
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev]
+    Description: Ambiente; prod queda fuera hasta integrar Cognito.
+  IdentityCenterInstanceArn:
+    Type: String
+    AllowedPattern: "arn:aws:sso:::instance/ssoins-[a-f0-9]{16}"
+    Description: ARN de la instancia de IAM Identity Center (aws sso-admin list-instances).
+  IdentityStoreId:
+    Type: String
+    AllowedPattern: "d-[a-z0-9]{10}"
+    Description: Id del Identity Store (aws sso-admin list-instances).
+  CdkQualifier:
+    Type: String
+    Default: hnb659fds
+    Description: Qualifier de cdk bootstrap (el valor por defecto de CDK).
+
+Resources:
+  AppPermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Techo de permisos para los roles de las Lambdas: aunque un despliegue cree un rol con
+          una politica amplia, solo podra usar DynamoDB y CloudWatch Logs del proyecto.
+        must:
+          - El nombre debe coincidir con APP_PERMISSIONS_BOUNDARY en infra/cdk/lib/config.ts.
+          - Debe cubrir todo lo que usan las Lambdas (tablas votacion-<stage>-* y sus logs).
+    Properties:
+      ManagedPolicyName: !Sub votacion-${Stage}-app-boundary
+      Description: Limite de permisos para los roles que crea CDK en el proyecto
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TablasDelProyecto
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:ConditionCheckItem
+            Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/votacion-${Stage}-*
+          - Sid: LogsDeLasLambdas
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/votacion-${Stage}-*
+
+  CdkExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Reemplaza AdministratorAccess en el rol de ejecucion de cdk bootstrap: CloudFormation
+          solo puede gestionar recursos del proyecto. Sin esto, cualquiera que asuma el rol de
+          despliegue de CDK podria crear cualquier recurso de la cuenta.
+        must:
+          - Crear o modificar roles solo con AppPermissionsBoundary (condicion iam:PermissionsBoundary).
+          - Si un despliegue falla por AccessDenied, agregar la accion puntual, no comodines de servicio completos.
+    Properties:
+      ManagedPolicyName: !Sub votacion-${Stage}-cdk-execution
+      Description: Permisos del rol de ejecucion de CloudFormation para desplegar el proyecto
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DynamoDB
+            Effect: Allow
+            Action: dynamodb:*
+            Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/votacion-${Stage}-*
+          - Sid: Lambda
+            Effect: Allow
+            Action: lambda:*
+            Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:votacion-${Stage}-*
+          - Sid: CodigoDeLambdaDesdeAssets
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::cdk-${CdkQualifier}-assets-${AWS::AccountId}-${AWS::Region}/*
+          - Sid: GruposDeLogs
+            Effect: Allow
+            Action: logs:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/votacion-${Stage}-*
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/votacion-${Stage}-*
+          # Requeridos por API Gateway para los logs de acceso; no admiten restriccion por recurso
+          # https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging.html
+          - Sid: EntregaDeLogsDeApiGateway
+            Effect: Allow
+            Action:
+              - logs:CreateLogDelivery
+              - logs:GetLogDelivery
+              - logs:UpdateLogDelivery
+              - logs:DeleteLogDelivery
+              - logs:ListLogDeliveries
+              - logs:PutResourcePolicy
+              - logs:DescribeResourcePolicies
+              - logs:DescribeLogGroups
+            Resource: "*"
+          # Los ids de las APIs son aleatorios, por eso el recurso no lleva el nombre del proyecto
+          - Sid: HttpApi
+            Effect: Allow
+            Action: apigateway:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+          - Sid: ReglaProgramada
+            Effect: Allow
+            Action: events:*
+            Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/votacion-${Stage}-*
+          - Sid: AlarmasYPanel
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:DescribeAlarms
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+              - cloudwatch:ListTagsForResource
+              - cloudwatch:PutDashboard
+              - cloudwatch:GetDashboard
+              - cloudwatch:DeleteDashboards
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:votacion-${Stage}-*
+              - !Sub arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/votacion-${Stage}-*
+          - Sid: VersionDeBootstrap
+            Effect: Allow
+            Action: ssm:GetParameters
+            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${CdkQualifier}/version
+          - Sid: CrearRolesSoloConLimite
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePermissionsBoundary
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/Votacion-${Stage}-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Ref AppPermissionsBoundary
+          - Sid: AdministrarRolesDelProyecto
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListRoleTags
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+              - iam:UpdateAssumeRolePolicy
+              - iam:DeleteRole
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/Votacion-${Stage}-*
+          - Sid: PasarRolesSoloALambda
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/Votacion-${Stage}-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: NoQuitarElLimite
+            Effect: Deny
+            Action: iam:DeleteRolePermissionsBoundary
+            Resource: "*"
+
+  DevelopersGroup:
+    Type: AWS::IdentityStore::Group
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Los permisos se asignan al grupo y no a cada persona: para dar acceso basta con agregar
+          al usuario de Identity Center al grupo.
+    Properties:
+      IdentityStoreId: !Ref IdentityStoreId
+      DisplayName: !Sub votacion-${Stage}-developers
+      Description: Desarrolladores del sistema de votacion popular
+
+  DeveloperPermissionSet:
+    Type: AWS::SSO::PermissionSet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Permisos minimos del desarrollador: desplegar via los roles de CDK, cargar el catalogo
+          inicial (seed) y leer logs, alarmas y panel. Credenciales temporales de 8 horas.
+        must:
+          - No agregar permisos de IAM ni de Identity Center: permitiria escalar privilegios.
+    Properties:
+      InstanceArn: !Ref IdentityCenterInstanceArn
+      Name: !Sub Votacion-${Stage}-Developer
+      Description: Desarrollador del sistema de votacion popular (permisos minimos)
+      SessionDuration: PT8H
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DesplegarConCdk
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}
+          - Sid: CargaInicial
+            Effect: Allow
+            Action: dynamodb:PutItem
+            Resource:
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/votacion-${Stage}-users
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/votacion-${Stage}-categories
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/votacion-${Stage}-nominees
+          - Sid: LeerLogsDelProyecto
+            Effect: Allow
+            Action:
+              - logs:DescribeLogStreams
+              - logs:GetLogEvents
+              - logs:FilterLogEvents
+              - logs:StartQuery
+              - logs:StopQuery
+              - logs:GetLogGroupFields
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/votacion-${Stage}-*
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/votacion-${Stage}-*
+          # Lecturas que no admiten restriccion por recurso (listar grupos, resultados de consultas, metricas)
+          - Sid: LecturasSinRecurso
+            Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+              - logs:DescribeQueries
+              - logs:GetQueryResults
+              - cloudwatch:GetMetricData
+              - cloudwatch:ListDashboards
+            Resource: "*"
+          - Sid: AlarmasYPanel
+            Effect: Allow
+            Action:
+              - cloudwatch:DescribeAlarms
+              - cloudwatch:GetDashboard
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:votacion-${Stage}-*
+              - !Sub arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/votacion-${Stage}-*
+          - Sid: LeerStacksDelProyecto
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Votacion-${Stage}-*/*
+
+  DevelopersAssignment:
+    Type: AWS::SSO::Assignment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Da al grupo de desarrolladores el permission set en esta cuenta.
+    Properties:
+      InstanceArn: !Ref IdentityCenterInstanceArn
+      PermissionSetArn: !GetAtt DeveloperPermissionSet.PermissionSetArn
+      PrincipalType: GROUP
+      PrincipalId: !GetAtt DevelopersGroup.GroupId
+      TargetType: AWS_ACCOUNT
+      TargetId: !Ref AWS::AccountId
+
+Outputs:
+  CdkExecutionPolicyArn:
+    Description: Pasar a cdk bootstrap --cloudformation-execution-policies
+    Value: !Ref CdkExecutionPolicy
+  AppPermissionsBoundaryArn:
+    Description: Limite de permisos que CDK aplica a todos sus roles
+    Value: !Ref AppPermissionsBoundary
+  DevelopersGroupName:
+    Description: Grupo de Identity Center al que se agregan los desarrolladores
+    Value: !Sub votacion-${Stage}-developers
+  PermissionSetName:
+    Description: Permission set que se elige en aws configure sso
+    Value: !Sub Votacion-${Stage}-Developer

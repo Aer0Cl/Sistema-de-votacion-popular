@@ -92,3 +92,9 @@ export interface VotingApi {
   // solo administradores de la votacion
   getResults(code: string): Promise<ElectionResults>
 }
+
+// Mientras no exista Cognito, el usuario se elige en el front (selector de usuario de prueba)
+export interface DevVotingApi extends VotingApi {
+  setUser(userId: string): void
+  listUsers(): Promise<User[]>
+}

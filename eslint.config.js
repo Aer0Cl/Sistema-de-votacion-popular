@@ -8,7 +8,13 @@ import vueParser from 'vue-eslint-parser'
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      '**/cdk.out/**',
+      'apps/api/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -46,7 +52,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/api/**/*.ts', 'packages/**/*.ts', '**/vite.config.ts'],
+    files: ['infra/**/*.ts', 'packages/**/*.ts', '**/vite.config.ts'],
     languageOptions: {
       globals: globals.node,
     },

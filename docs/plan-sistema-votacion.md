@@ -66,32 +66,53 @@ corra unos segundos tarde, un cambio hecho despues del cierre no entra en la vot
 
 | Area | Estado |
 | --- | --- |
-| `packages/voting-core` | Tipos de dominio, conteo (`tallyPlurality`, `tallyInstantRunoff`, `tallyElection`), reglas (`validateNewElection`, `validateAnswerChoice`, `snapshotAnswers`, codigos). 43 tests |
-| `apps/web` | Pantallas de votaciones sobre una **API simulada en memoria** (`src/api/mockApi.ts`) con las mismas reglas que tendra el backend. 7 tests |
-| `apps/api` | Solo un endpoint de salud |
-| Infra | CloudFormation para el sitio estatico; el workflow de deploy esta comentado |
+| `packages/voting-core` | Tipos, reglas y conteo en TypeScript para el front. 51 tests |
+| `apps/web` | Pantallas completas. Usa la API simulada en memoria, o el backend real si se define `VITE_API_URL`. 22 tests |
+| `apps/api` | Backend en Python (Lambda): reglas, conteo, repositorios en memoria y DynamoDB, rutas HTTP. 78 tests (los del servicio corren tambien contra DynamoDB simulado con moto) |
+| `infra/cdk` | CDK en TypeScript: tablas, Lambdas, HTTP API, logs, alarmas y panel. 9 tests; `cdk synth --strict` pasa cdk-nag |
+| `infra/cloudformation` | Sitio estatico (S3 + CloudFront); el workflow de deploy esta comentado |
 
-## 4. Arquitectura propuesta
+## 4. Arquitectura
 
 ```
  Navegador (Vue SPA)
-      |  HTTPS + JWT
+      |  HTTPS (+ JWT cuando se integre Cognito)
       v
- CloudFront ──> S3 (frontend estatico)
+ API Gateway (HTTP API, /api/v1/*)  -- logs de acceso --> CloudWatch Logs
       |
-      └──> API Gateway (HTTP API) ──> Lambda (Node 22 + TS) ──> DynamoDB
-                    |                        ^
-               Cognito (grupo "admin")       |
-                                   EventBridge Scheduler (foto al cierre)
+      v
+ Lambda votacion-<stage>-api (Python 3.14, ARM64, Powertools) --> DynamoDB (8 tablas)
+                                                    |
+ EventBridge (cada 5 min) --> Lambda votacion-<stage>-snapshots   +--> CloudWatch Logs (JSON)
+                                                                      alarmas + panel
 ```
 
-Estructura de repositorio (npm workspaces):
+Estructura de repositorio (npm workspaces; `apps/api` delega en `uv`):
 
 ```
-apps/web/              frontend
-apps/api/              handlers Lambda, validacion, repositorios
-packages/voting-core/  tipos + reglas + conteo, compartido por web y api
+apps/web/              frontend Vue
+apps/api/              Lambda en Python (uv, pytest, ruff)
+packages/voting-core/  tipos + reglas + conteo en TypeScript (lo usa el front)
+infra/cdk/             infraestructura del backend (CDK)
 ```
+
+**Reglas duplicadas:** el backend es Python y el front TypeScript, asi que las reglas y el conteo
+existen en `voting-core` y en `apps/api/src/votacion_api/domain/`. Los tests de ambos cubren los
+mismos casos para mantenerlos alineados; la validacion que cuenta es la del backend.
+
+### Seguimiento en CloudWatch
+
+- **Logs de las Lambdas** (`/aws/lambda/votacion-<stage>-api` y `-snapshots`): JSON estructurado con
+  `correlation_id` (id del request de API Gateway), `userId` y un campo `action` por operacion
+  (`answer.saved`, `election.created`, `membership.joined`, `snapshot.taken`, `category.*`,
+  `nominee.*`, ...). Nunca registran el contenido de un voto.
+- **Logs de acceso de API Gateway** (`/aws/apigateway/votacion-<stage>-api`): metodo, ruta, estado,
+  latencia y errores de integracion por request.
+- Retencion: 2 semanas en dev, 3 meses en prod.
+- **Alarmas** (sin destino de notificacion todavia): errores de cada Lambda y respuestas 5xx.
+- **Panel** `votacion-<stage>-backend`: solicitudes, errores, latencia y fotos de cierre.
+
+Ejemplo en Logs Insights: `fields @timestamp, action, userId, electionCode | filter ispresent(action)`.
 
 ## 5. Modelo de datos
 
@@ -109,17 +130,37 @@ Definido en `packages/voting-core/src/types.ts`:
 
 El estado de una votacion (`open` / `closed`) se deriva de `closesAt`.
 
-### Diseño DynamoDB (tabla unica)
+### Tablas DynamoDB
 
-| Entidad | PK | SK |
-| --- | --- | --- |
-| Category | `CATALOG` | `CATEGORY#<id>` |
-| Nominee | `CATEGORY#<id>` | `NOMINEE#<id>` |
-| Election | `ELECTION#<code>` | `META` |
-| Membership | `ELECTION#<code>` | `MEMBER#<userId>` (GSI1: `USER#<userId>` / `ELECTION#<code>`) |
-| Answer (actual) | `USER#<userId>` | `ANSWER#<categoryId>` |
-| Answer (version) | `USER#<userId>` | `ANSWER#<categoryId>#<updatedAt>` |
-| Snapshot | `ELECTION#<code>` | `SNAPSHOT` (o una fila por respuesta si crece) |
+Una tabla por entidad (`infra/cdk/lib/data-stack.ts`), bajo demanda, con PITR y cifrado. Nombres
+`votacion-<stage>-<tabla>`. En prod tienen proteccion contra borrado y se conservan al destruir
+el stack.
+
+| Tabla | Clave de particion | Clave de orden | Indice |
+| --- | --- | --- | --- |
+| `users` | `id` | | |
+| `categories` | `id` | | |
+| `nominees` | `id` | | `byCategory`: `categoryId` + `createdAt` |
+| `elections` | `code` | | |
+| `memberships` | `electionCode` | `userId` | `byUser`: `userId` + `electionCode` |
+| `answers` (respuesta actual) | `userId` | `categoryId` | |
+| `answerHistory` (registro de votos) | `userCategory` | `version` (`<updatedAt>#<sufijo>`) | |
+| `snapshots` (fotos de cierre) | `electionCode` | `userCategory` | |
+
+Guardar una respuesta escribe `answers` y `answerHistory` en una transaccion. La foto consulta,
+por participante y categoria, la ultima version con `version < closesAt`; por eso las fechas se
+guardan siempre en UTC con milisegundos (`2027-03-01T00:00:00.000Z`).
+
+**Limites conocidos del MVP:** listar votaciones y catalogo usa `Scan` y la foto hace una consulta
+por participante y categoria. Alcanza para cientos de votaciones y participantes; si crece, agregar
+indices por administrador y paralelizar la foto.
+
+### Identidad
+
+Hasta integrar Cognito, el usuario llega en el encabezado `X-User-Id` (`AUTH_MODE=dev-header`), y
+solo existen los usuarios de prueba de la tabla `users`. **Cualquiera puede hacerse pasar por otro
+usuario**, por eso `infra/cdk/lib/app.ts` impide sintetizar el stage `prod`. Con Cognito, la Lambda
+lee el claim `sub` del JWT (`AUTH_MODE=jwt`, ya implementado) y API Gateway valida el token.
 
 ## 6. API REST
 
@@ -171,23 +212,28 @@ Workspaces, Vitest, README, CI con lint/check/test.
 - Selector de "usuario de prueba" en la barra mientras no hay autenticacion.
 - Datos de ejemplo: 3 votaciones (una ya cerrada) y 4 usuarios en `apps/web/src/api/seed.ts`.
 
-### Fase 2 — Backend MVP
-- Handlers Lambda (Hono) con validacion (Zod) que implementan la tabla de la seccion 6 usando las
-  reglas de `voting-core`.
-- Repositorios: memoria (tests) y DynamoDB.
-- Historial de respuestas y foto de cierre: EventBridge Scheduler programa la foto en `closesAt`;
-  como respaldo, la foto se toma al primer acceso a una votacion cerrada que no la tenga.
-- Seed con el catalogo de 24 categorias y sus nominados.
-- Cliente HTTP en el front que implemente `VotingApi`, elegido por variable de entorno.
+### Fase 2 — Backend MVP — hecha (sin desplegar)
+- Lambda en Python con AWS Lambda Powertools (rutas de la seccion 6, logs estructurados).
+- Repositorios en memoria y DynamoDB; los tests del servicio corren contra ambos (moto).
+- Foto de cierre: regla de EventBridge cada 5 minutos + respaldo al primer acceso. Como la foto
+  solo usa versiones anteriores al cierre, el retraso no altera el resultado.
+- Carga inicial (`python -m votacion_api.seed`): 24 categorias, nominados genericos y usuarios de
+  prueba; no sobrescribe datos existentes.
+- CDK (`infra/cdk`): stacks `Votacion-dev-Data` y `Votacion-dev-Api`, cdk-nag (AwsSolutions).
+- Cliente HTTP en el front (`apps/web/src/api/httpApi.ts`), activado con `VITE_API_URL`.
+- Pendiente: primer despliegue y prueba de punta a punta contra AWS.
 
 ### Fase 3 — Autenticacion
-- Cognito; grupo `admin` para crear votaciones.
-- Reemplazar el selector de usuario de prueba por login.
+- Cognito (los usuarios los gestionan los servicios de AWS); grupo `admin` para crear votaciones.
+- Autorizador JWT en el HTTP API y `AUTH_MODE=jwt` en la Lambda; quitar `/dev/users` y el
+  selector de usuario de prueba.
+- Recien entonces habilitar el stage `prod`.
 
 ### Fase 4 — Infraestructura y despliegue
-- `infra/cloudformation/api.yaml` (SAM): HTTP API, Lambdas, DynamoDB, Cognito, Scheduler.
-- CloudFront con origen `/api/*` hacia API Gateway.
-- Reactivar el workflow con ambientes dev / qa / prod.
+- Destino de notificacion (SNS / correo) para las alarmas.
+- CloudFront con origen `/api/*` hacia API Gateway (mismo dominio, sin CORS).
+- Reactivar el workflow con ambientes dev / qa / prod, agregando `cdk deploy` y los tests de
+  Python (requiere `uv` en CI).
 
 ### Fase 5 — Endurecimiento
 - Pruebas E2E del flujo completo (Playwright).
