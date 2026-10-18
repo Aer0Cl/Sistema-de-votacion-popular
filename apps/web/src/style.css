@@ -134,8 +134,86 @@ h1 {
   cursor: pointer;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+
+.stack {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.field input,
+.user-switch select {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.error {
+  color: #a3261c;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(22, 34, 51, 0.08);
+  color: var(--text-main);
+}
+
+.badge-open {
+  background: rgba(15, 109, 98, 0.14);
+  color: #09443d;
+}
+
+.badge-closed {
+  background: rgba(163, 38, 28, 0.12);
+  color: #7a1c14;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.user-switch {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 @media (max-width: 900px) {
-  .grid {
+  .grid,
+  .grid.two {
     grid-template-columns: 1fr;
   }
 
