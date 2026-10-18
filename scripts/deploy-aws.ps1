@@ -31,7 +31,7 @@ if (-not $bucketName -or -not $distributionId) {
 }
 
 Write-Host "Syncing assets to s3://$bucketName..."
-aws s3 sync dist/ "s3://$bucketName" --delete --region $Region
+aws s3 sync apps/web/dist/ "s3://$bucketName" --delete --region $Region
 
 Write-Host "Invalidating CloudFront cache..."
 aws cloudfront create-invalidation `

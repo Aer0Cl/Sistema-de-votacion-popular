@@ -1,0 +1,13 @@
+{
+  "name": "@votacion/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@votacion/voting-core": "*"
+  }
+}

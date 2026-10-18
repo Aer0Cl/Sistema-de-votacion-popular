@@ -10,8 +10,6 @@
       "@views/*": ["src/views/*"],
       "@stores/*": ["src/stores/*"],
       "@router/*": ["src/router/*"],
-      "@assets/*": ["src/assets/*"],
-      "@interfaces": ["src/interfaces/index.ts"],
       "@interfaces/*": ["src/interfaces/*"]
     },
 

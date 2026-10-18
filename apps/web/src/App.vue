@@ -3,7 +3,7 @@
     <nav class="top-nav">
       <RouterLink to="/" class="top-link">Inicio</RouterLink>
       <RouterLink to="/about" class="top-link">Acerca</RouterLink>
-      <RouterLink to="/movie-list" class="top-link">Movies</RouterLink>
+      <RouterLink to="/movie-list" class="top-link">Ranking</RouterLink>
     </nav>
   </header>
 

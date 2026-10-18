@@ -117,18 +117,15 @@ h1 {
   font-size: 1.1rem;
 }
 
-.card ul {
+.card p {
   margin: 0;
-  padding-left: 1rem;
   color: var(--text-muted);
 }
 
-.counter-card {
-  margin-top: 1rem;
-}
-
 .btn {
+  display: inline-block;
   margin-top: 0.8rem;
+  text-decoration: none;
   border: 1px solid #0a5d53;
   background: linear-gradient(135deg, #0f6d62, #0b5c53);
   color: #fff;
