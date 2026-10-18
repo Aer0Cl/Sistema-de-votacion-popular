@@ -7,15 +7,19 @@ import { TABLE_SPECS } from '../lib/data-stack'
 function synth() {
   // Sin empaquetar la Lambda: los tests solo revisan la plantilla
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } })
-  const { data, api } = createVotingStacks(app, {
+  const { data, web, api } = createVotingStacks(app, {
     stage: 'dev',
     env: { account: '123456789012', region: 'us-east-1' },
     allowedOrigins: ['http://localhost:5173'],
   })
-  return { data: Template.fromStack(data), api: Template.fromStack(api) }
+  return {
+    data: Template.fromStack(data),
+    web: Template.fromStack(web),
+    api: Template.fromStack(api),
+  }
 }
 
-const { data, api } = synth()
+const { data, web, api } = synth()
 
 describe('DataStack', () => {
   it('crea una tabla por entidad, bajo demanda y con PITR', () => {
@@ -48,6 +52,72 @@ describe('DataStack', () => {
   })
 })
 
+describe('WebStack', () => {
+  it('guarda el front en un bucket privado con nombre que acepta dev-access.yaml', () => {
+    web.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: 'votacion-dev-web-123456789012',
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    })
+  })
+
+  it('sirve el bucket solo por CloudFront con OAC y HTTPS', () => {
+    web.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1)
+    web.hasResourceProperties('AWS::S3::BucketPolicy', {
+      PolicyDocument: {
+        // arrayWith respeta el orden: enforceSSL agrega el Deny antes que el permiso de OAC
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Deny',
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+          }),
+          Match.objectLike({
+            Effect: 'Allow',
+            Principal: { Service: 'cloudfront.amazonaws.com' },
+            Action: 's3:GetObject',
+          }),
+        ]),
+      },
+    })
+    web.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        DefaultRootObject: 'index.html',
+        DefaultCacheBehavior: Match.objectLike({
+          ViewerProtocolPolicy: 'redirect-to-https',
+        }),
+      }),
+    })
+  })
+
+  it('resuelve las rutas del router con index.html', () => {
+    web.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CustomErrorResponses: [403, 404].map((ErrorCode) => ({
+          ErrorCode,
+          ResponseCode: 200,
+          ResponsePagePath: '/index.html',
+          ErrorCachingMinTTL: 0,
+        })),
+      }),
+    })
+  })
+
+  it('no crea roles ni Lambdas (el front lo sube el workflow con aws s3 sync)', () => {
+    web.resourceCountIs('AWS::IAM::Role', 0)
+    web.resourceCountIs('AWS::Lambda::Function', 0)
+  })
+
+  it('publica las salidas que lee el workflow', () => {
+    for (const output of ['WebBucketName', 'DistributionId', 'WebUrl']) {
+      web.hasOutput(output, {})
+    }
+  })
+})
+
 describe('ApiStack', () => {
   it('crea las Lambdas en Python 3.14 ARM con las tablas y el modo de autenticacion', () => {
     api.resourceCountIs('AWS::Lambda::Function', 2)
@@ -75,6 +145,13 @@ describe('ApiStack', () => {
         Format: Match.stringLikeRegexp('requestId'),
       }),
     })
+  })
+
+  it('habilita por CORS el front de CloudFront ademas de los origenes extra', () => {
+    const [httpApi] = Object.values(api.findResources('AWS::ApiGatewayV2::Api'))
+    const origins = httpApi.Properties.CorsConfiguration.AllowOrigins as unknown[]
+    expect(origins[0]).toBe('http://localhost:5173')
+    expect(JSON.stringify(origins[1])).toContain('Votacion-dev-Web')
   })
 
   it('expone la API bajo /api/v1 y programa la foto de cierre', () => {

@@ -1,0 +1,84 @@
+name: Invalidar cache del front
+
+# Manual (Actions > Run workflow): invalida la cache de CloudFront del stack
+# Votacion-<stage>-Web sin volver a desplegar, p. ej. si se subieron archivos a mano o el
+# navegador sigue recibiendo una version vieja. Usa el mismo rol OIDC que el despliegue.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente cuyo front se invalida
+        type: choice
+        options:
+          - dev
+        default: dev
+      paths:
+        description: Rutas a invalidar, separadas por espacios (p. ej. /index.html /assets/*)
+        type: string
+        default: '/*'
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  STAGE: ${{ inputs.environment }}
+
+jobs:
+  invalidate:
+    name: Invalidar CloudFront en ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # Mismo environment que el despliegue: el rol de AWS solo confia en sus jobs
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-invalidate-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Buscar la distribucion
+        id: stack
+        run: |
+          id=$(aws cloudformation describe-stacks --stack-name "Votacion-$STAGE-Web" \
+            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)
+          if [ -z "$id" ] || [ "$id" = "None" ]; then
+            echo "::error::El stack Votacion-$STAGE-Web no tiene la salida DistributionId; despliega primero."
+            exit 1
+          fi
+          echo "distribution_id=$id" >> "$GITHUB_OUTPUT"
+
+      # Las rutas llegan por env (no interpoladas en el script) y deben empezar con /
+      - name: Invalidar y esperar a que termine
+        env:
+          DISTRIBUTION_ID: ${{ steps.stack.outputs.distribution_id }}
+          PATHS: ${{ inputs.paths }}
+        run: |
+          read -ra paths <<< "$PATHS"
+          if [ "${#paths[@]}" -eq 0 ]; then
+            echo "::error::Indica al menos una ruta."
+            exit 1
+          fi
+          for path in "${paths[@]}"; do
+            if [[ "$path" != /* ]]; then
+              echo "::error::La ruta '$path' debe empezar con /."
+              exit 1
+            fi
+          done
+          invalidation_id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "${paths[@]}" --query Invalidation.Id --output text)
+          echo "Invalidacion $invalidation_id creada; esperando..."
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$invalidation_id"
+          {
+            echo "### Cache invalidada en $STAGE"
+            echo "- Distribucion: \`$DISTRIBUTION_ID\`"
+            echo "- Invalidacion: \`$invalidation_id\`"
+            echo "- Rutas: \`${paths[*]}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

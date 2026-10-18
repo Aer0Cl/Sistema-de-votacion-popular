@@ -36,3 +36,9 @@ __pycache__
 
 # Variables locales del front
 .env.local
+
+# Salidas de cdk deploy --outputs-file
+cdk-outputs.json
+
+# Documentacion local (no se versiona)
+docs/

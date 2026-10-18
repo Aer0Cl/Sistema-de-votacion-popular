@@ -3,19 +3,33 @@
 Aplicacion web para votaciones al estilo de los premios Oscar: algunas categorias se
 deciden por mayoria simple y otras, como Mejor Pelicula, por ranking de preferencias
 (segunda vuelta instantanea). Cada voto se asocia a un usuario y los resultados se
-pueden calcular por grupo de usuarios.
+calculan por votacion.
 
-El plan de desarrollo esta en [docs/plan-sistema-votacion.md](docs/plan-sistema-votacion.md).
+> La documentacion detallada (plan, arquitectura, front, back e infraestructura) vive en `docs/`,
+> que es local y no se versiona (ver `.gitignore`). Este README resume lo necesario para
+> desarrollar, desplegar y probar.
+
+## Reglas principales
+
+- Cada votacion tiene un nombre visible, un codigo de 8 caracteres para inscribirse, una fecha
+  de cierre y entre 2 y 24 categorias del catalogo. Solo los administradores las crean.
+- Un usuario puede participar en varias votaciones y tiene **una respuesta por categoria**,
+  compartida por todas sus votaciones abiertas. Al cerrar una votacion se toma una foto de las
+  respuestas; el usuario sigue cambiandolas en sus otras votaciones abiertas.
+- El tipo de votacion (mayoria o ranking) viene con la categoria. En ranking se ordenan todos los
+  nominados. Los resultados solo los ven los administradores de la votacion.
+- Los administradores crean, editan y eliminan categorias; los nominados se editan pero no se
+  eliminan. Un usuario puede abandonar una votacion mientras este abierta.
 
 ## Stack
 
 - Frontend: Vue 3 + TypeScript + Vite, Vue Router y Pinia
 - Backend: AWS Lambda en Python 3.14 (Powertools), API Gateway HTTP API y DynamoDB
-- Infraestructura del backend con AWS CDK (TypeScript) + cdk-nag; logs, alarmas y panel en CloudWatch
+- Infraestructura con AWS CDK (TypeScript) + cdk-nag, que genera los stacks de CloudFormation;
+  logs, alarmas y panel en CloudWatch
+- Acceso a AWS sin llaves: IAM Identity Center (personas) y OIDC (GitHub Actions)
 - Pruebas con Vitest (TypeScript) y pytest + moto (Python)
-- Sitio estatico con CloudFormation (S3 + CloudFront)
-- CI/CD con GitHub Actions
-- ESLint + Prettier
+- CI/CD con GitHub Actions; ESLint + Prettier
 
 ## Estructura del proyecto (npm workspaces)
 
@@ -27,25 +41,44 @@ El plan de desarrollo esta en [docs/plan-sistema-votacion.md](docs/plan-sistema-
 |-- packages/
 |   `-- voting-core/      # tipos, reglas y conteo en TypeScript para el front
 |-- infra/
-|   |-- cdk/              # backend: DynamoDB, Lambdas, HTTP API, CloudWatch (@votacion/infra)
+|   |-- cdk/              # stacks Data, Web y Api (@votacion/infra)
 |   `-- cloudformation/
-|       `-- static-site.yaml
+|       `-- dev-access.yaml   # acceso (Identity Center y OIDC de GitHub) y permisos de CDK
 |-- scripts/
-|   `-- deploy-aws.ps1
-|-- docs/
-|-- .github/workflows/deploy-aws.yml
+|   `-- deploy-aws.ps1    # despliegue local: CDK, build del front, s3 sync, invalidacion
+|-- .github/workflows/
+|   |-- deploy-aws.yml            # verificaciones y despliegue
+|   `-- invalidate-cloudfront.yml # invalidacion manual de la cache del front
 `-- package.json          # raiz de los workspaces
 ```
 
-`voting-core` se publica como codigo fuente TypeScript (`exports` apunta a `src/index.ts`);
-lo compilan directamente Vite en `web` y el empaquetador de Lambda en `api`.
+`voting-core` se publica como codigo fuente TypeScript (`exports` apunta a `src/index.ts`) y lo
+compila directamente Vite en `web`. El backend en Python no lo usa: tiene un port de las mismas
+reglas en `apps/api/src/votacion_api/domain/`.
+
+## Arquitectura en AWS
+
+```text
+Navegador -> CloudFront -> S3 privado (apps/web/dist)          stack Votacion-<stage>-Web
+Navegador -> API Gateway HTTP API /api/v1/* -> Lambda API      stack Votacion-<stage>-Api
+EventBridge (cada 5 min) -> Lambda de fotos de cierre
+Lambdas -> DynamoDB (8 tablas)                                 stack Votacion-<stage>-Data
+```
+
+| Stack                   | Recursos                                                                                                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Votacion-<stage>-Data` | Tablas `votacion-<stage>-*` bajo demanda, con PITR y cifrado                                                                                                                |
+| `Votacion-<stage>-Web`  | Bucket `votacion-<stage>-web-<cuenta>` privado, CloudFront con OAC y HTTPS; las rutas del router responden con `index.html`                                                 |
+| `Votacion-<stage>-Api`  | Lambdas `votacion-<stage>-api` y `-snapshots`, HTTP API con CORS para el dominio de CloudFront, regla de EventBridge, logs, 3 alarmas y el panel `votacion-<stage>-backend` |
+
+Salidas que usan los despliegues: `WebUrl`, `WebBucketName` y `DistributionId` (Web) y `ApiUrl`
+(Api). Solo existe el stage `dev`: `prod` esta bloqueado hasta integrar Cognito.
 
 ## Requisitos
 
-- Node.js 20+
-- npm 10+
+- Node.js 20+ y npm 10+
 - [uv](https://docs.astral.sh/uv/) para el backend en Python (instala Python 3.14 si falta)
-- AWS CLI v2 configurado para desplegar, con una cuenta inicializada con `cdk bootstrap`
+- AWS CLI v2, con un perfil de IAM Identity Center para desplegar
 
 ## Comandos
 
@@ -60,24 +93,31 @@ npm test               # pruebas de todos los workspaces, incluido pytest
 npm run build
 npm run format
 npm run preview
+npm run deploy:aws     # despliegue local en dev (ver "Despliegue")
 ```
 
-Para correr un comando en un solo workspace: `npm run test -w @votacion/api`.
+Para correr un comando en un solo workspace: `npm run test -w @votacion/api`. Primera vez en
+`apps/api`: `uv sync`.
 
-## Acceso al ambiente dev (IAM Identity Center)
+Sin `VITE_API_URL` el front usa una API simulada en memoria, asi que no hace falta el backend
+para desarrollar las pantallas. Para usar el backend desplegado, copiar
+`apps/web/.env.example` a `apps/web/.env.local` con la salida `ApiUrl`.
 
-Los desarrolladores entran con IAM Identity Center (credenciales temporales, sin llaves de
-acceso) y permisos minimos: solo pueden desplegar a traves de los roles de CDK, cargar el
-catalogo inicial y leer logs, alarmas y el panel. La plantilla
-[`infra/cloudformation/dev-access.yaml`](infra/cloudformation/dev-access.yaml) crea:
+## Acceso a AWS (dev)
 
-- el grupo `votacion-dev-developers` y el permission set `Votacion-dev-Developer` (sesiones de 8 h)
-  asignado a la cuenta;
-- `votacion-dev-cdk-execution`: politica del rol de ejecucion de CloudFormation, en lugar de
-  `AdministratorAccess`, que solo permite gestionar recursos del proyecto;
-- `votacion-dev-app-boundary`: limite de permisos que CDK aplica a todos sus roles.
+Nadie usa llaves de acceso. La plantilla
+[`infra/cloudformation/dev-access.yaml`](infra/cloudformation/dev-access.yaml) (stack
+`votacion-dev-access`, ya desplegado) crea:
 
-Configuracion inicial, una sola vez, **con credenciales de administrador**:
+| Recurso                                                                   | Para que                                                                                                             |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Grupo `votacion-dev-developers` y permission set `Votacion-dev-Developer` | Desarrolladores por Identity Center, sesiones de 8 h: desplegar, cargar el seed, leer logs, alarmas y panel          |
+| Proveedor OIDC de GitHub y rol `votacion-dev-github-deploy`               | GitHub Actions; solo lo asumen los jobs del environment `dev` de este repositorio                                    |
+| `votacion-dev-deploy`                                                     | Permisos de despliegue compartidos: roles de CDK, leer stacks, subir el front e invalidar CloudFront                 |
+| `votacion-dev-cdk-execution`                                              | Politica del rol de ejecucion de CloudFormation (en lugar de `AdministratorAccess`), solo para recursos del proyecto |
+| `votacion-dev-app-boundary`                                               | Limite de permisos que CDK aplica a todos sus roles                                                                  |
+
+**Administrador, una vez** (y cada vez que cambie la plantilla):
 
 ```bash
 aws sso-admin list-instances   # InstanceArn e IdentityStoreId
@@ -85,73 +125,79 @@ aws cloudformation deploy --stack-name votacion-dev-access --template-file infra
 cd infra/cdk && npx cdk bootstrap --cloudformation-execution-policies arn:aws:iam::<cuenta>:policy/votacion-dev-cdk-execution --termination-protection
 ```
 
-Por cada desarrollador:
+**Por cada desarrollador:**
 
 1. En la consola de IAM Identity Center, crear el usuario y agregarlo al grupo
-   `votacion-dev-developers`. Identity Center le envia un correo para activar la cuenta y MFA.
-2. En su equipo, configurar el perfil (la URL de inicio esta en la configuracion de Identity
-   Center) y elegir la cuenta y el permission set `Votacion-dev-Developer`:
+   `votacion-dev-developers` (recibe un correo para activar la cuenta y MFA).
+2. `aws configure sso --profile votacion-dev` y elegir el permission set `Votacion-dev-Developer`.
+3. `aws sso login --profile votacion-dev` antes de desplegar o cargar datos.
+
+**GitHub, una vez:** en Settings > Environments crear el environment `dev`, limitar sus
+"Deployment branches" a las ramas que pueden desplegar (al menos `main`) y definir la variable
+`AWS_DEPLOY_ROLE_ARN` con la salida `GitHubDeployRoleArn` del stack `votacion-dev-access`.
+
+Si un despliegue falla con `AccessDenied`, agregar la accion puntual a la politica que
+corresponda en `dev-access.yaml` y volver a desplegar la plantilla con credenciales de
+administrador.
+
+## Despliegue
+
+Todos los caminos hacen lo mismo: `cdk deploy --all` (stacks Data, Web y Api), compilan el front
+con `ApiUrl` como `VITE_API_URL`, lo suben al bucket del stack Web (assets con cache larga,
+`index.html` sin cache) e invalidan CloudFront.
+
+| Como             | Cuando                                                                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push a `main`    | Automatico: workflow `deploy-aws.yml`, despues de lint, tipos, pruebas y `cdk synth --strict`                                                                          |
+| Manual en GitHub | Actions > **CI y despliegue en AWS** > Run workflow: la rama se elige en "Use workflow from" y el ambiente en la lista. La rama debe estar permitida en el environment |
+| Local            | `npm run deploy:aws` con la sesion de `votacion-dev` (`scripts/deploy-aws.ps1 -AwsProfile <perfil> -Stage <stage>`)                                                    |
+
+Cada PR a `main` corre las verificaciones sin desplegar. El resumen de cada despliegue muestra la
+rama, el commit y las URLs del front y la API.
+
+**Invalidar la cache del front sin desplegar:** Actions > **Invalidar cache del front** > Run
+workflow, eligiendo el ambiente y las rutas (por defecto `/*`). Espera a que la invalidacion
+termine.
+
+## Probar la aplicacion desplegada
+
+1. **URL:** la muestra el resumen del workflow, el enlace del environment `dev` en Deployments, o:
 
    ```bash
-   aws configure sso --profile votacion-dev
+   aws cloudformation describe-stacks --stack-name Votacion-dev-Web --profile votacion-dev --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue" --output text
    ```
 
-3. Usar el perfil para desplegar y cargar datos:
+2. **Datos iniciales**, una vez despues del primer despliegue (el workflow no los carga; no
+   sobrescribe datos existentes):
 
    ```bash
-   aws sso login --profile votacion-dev
-   cd infra/cdk && npx cdk deploy --all -c stage=dev --profile votacion-dev
+   cd apps/api && AWS_PROFILE=votacion-dev uv run python -m votacion_api.seed --stage dev
    ```
 
-Si un despliegue falla con `AccessDenied`, agregar la accion puntual a `votacion-dev-cdk-execution`
-en la plantilla y volver a desplegarla con credenciales de administrador.
+   Crea el catalogo de categorias y nominados, y los usuarios de prueba Alice (admin), Bob,
+   Carla y Diego.
 
-## Backend
+3. **Flujo:** con el selector de usuario de la cabecera (solo dev):
 
-Sin `VITE_API_URL` el front usa una API simulada en memoria, asi que no hace falta el backend
-para desarrollar las pantallas.
+   | Usuario           | Ruta                              | Que probar                                           |
+   | ----------------- | --------------------------------- | ---------------------------------------------------- |
+   | Alice             | `/admin/catalogo`                 | Editar categorias y nominados                        |
+   | Alice             | `/votaciones/nueva`               | Crear una votacion y anotar su codigo                |
+   | Bob, Carla, Diego | `/` y `/votaciones/<codigo>`      | Inscribirse con el codigo y votar                    |
+   | Alice             | `/votaciones/<codigo>/resultados` | Ver resultados (solo administradores de la votacion) |
 
-Primera vez en `apps/api`: `uv sync` (crea `.venv` con las dependencias de `uv.lock`).
+4. **API directa:** `curl <ApiUrl>/health` y `curl -H "x-user-id: u-alice" <ApiUrl>/me`.
+5. **Logs:** panel `votacion-dev-backend` y grupos `/aws/lambda/votacion-dev-api` y
+   `/aws/apigateway/votacion-dev-api` en CloudWatch.
 
-Desplegar el stage dev (el empaquetado de la Lambda usa uv, sin Docker):
+> El stage dev identifica al usuario con el encabezado `X-User-Id` hasta integrar Cognito: la
+> API es publica y cualquiera con la URL puede actuar como cualquier usuario. Usar solo datos de
+> prueba.
 
-```bash
-cd infra/cdk
-npx cdk bootstrap            # una vez por cuenta y region
-npx cdk synth --strict       # sintetiza y aplica cdk-nag
-npx cdk diff
-npx cdk deploy --all -c stage=dev
-```
+## Pendiente
 
-Cargar el catalogo y los usuarios de prueba (no sobrescribe datos existentes):
-
-```bash
-cd apps/api
-AWS_PROFILE=votacion-dev uv run python -m votacion_api.seed --stage dev
-```
-
-Luego copiar `apps/web/.env.example` a `apps/web/.env.local` con la salida `ApiUrl` del stack.
-
-> El stage dev identifica al usuario con el encabezado `X-User-Id` hasta integrar Cognito: no
-> exponerlo con datos reales. El stage `prod` esta bloqueado hasta entonces.
-
-## Despliegue del sitio estatico (local)
-
-```powershell
-npm run deploy:aws
-```
-
-Opciones adicionales:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ./scripts/deploy-aws.ps1 -StackName "mi-stack" -ProjectName "mi-app" -Region "us-east-1"
-```
-
-## CI/CD con GitHub Actions
-
-El workflow `.github/workflows/deploy-aws.yml` corre lint, verificacion de tipos y pruebas,
-y luego despliega el frontend en cada push a `main`.
-
-Debes crear el secreto:
-
-- `AWS_ROLE_TO_ASSUME`: ARN del rol IAM con OIDC para GitHub Actions.
+- Primer despliegue y prueba de punta a punta.
+- Cognito y autorizador JWT; recien entonces habilitar `prod` (environment, stage de CDK y
+  `dev-access.yaml`).
+- Destino de notificacion para las alarmas.
+- Origen `/api/*` en CloudFront para quitar CORS, y dominio propio con certificado de ACM.

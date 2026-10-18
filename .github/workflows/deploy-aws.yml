@@ -1,109 +1,138 @@
-# name: Deploy Vue app to AWS
+name: CI y despliegue en AWS
 
-# on:
-#   push:
-#     branches:
-#       - feature/*
-#   workflow_dispatch:
-#     inputs:
-#       environment:
-#         description: 'Environment to deploy to'
-#         required: true
-#         default: 'dev'
-#         type: choice
-#         options:
-#           - dev
-#           - qa
-#           - prod
+# Verifica cada PR y despliega en dev cada push a main. A mano (Actions > Run workflow) se
+# elige la rama en "Use workflow from" y el ambiente en la lista. Los stacks de CloudFormation
+# (Votacion-<stage>-Data, -Web y -Api) los crea CDK; el front se compila con la URL de la API
+# desplegada y se sube al bucket del stack Web.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente a desplegar (environment de GitHub y stage de CDK)
+        type: choice
+        options:
+          - dev
+        default: dev
 
-# permissions:
-#   id-token: write
-#   contents: read
+permissions:
+  contents: read
 
-# env:
-#   AWS_REGION: us-east-1
+env:
+  AWS_REGION: us-east-1
+  STAGE: ${{ inputs.environment || 'dev' }}
 
-# jobs:
-#   deploy:
-#     runs-on: ubuntu-latest
+jobs:
+  checks:
+    name: Lint, tipos y pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
-#     env:
-#       ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
-#       STACK_NAME: ${{ format('vue-ts-webapp-{0}', github.event.inputs.environment || 'dev') }}
-#       PROJECT_NAME: ${{ format('vue-ts-app-{0}', github.event.inputs.environment || 'dev') }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
 
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v4
+      # Backend en Python (pytest) y empaquetado de la Lambda en el synth
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
 
-#       - name: Setup Node
-#         uses: actions/setup-node@v4
-#         with:
-#           node-version: 22
-#           cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run check
+      - run: npm test
 
-#       - name: Install dependencies
-#         run: npm ci
+      - name: Synth con cdk-nag
+        working-directory: infra/cdk
+        run: npx cdk synth --strict --quiet -c stage=$STAGE
 
-#       - name: Lint
-#         run: npm run lint
+  deploy:
+    name: Desplegar en ${{ inputs.environment || 'dev' }}
+    needs: checks
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # El rol de AWS solo confia en jobs de este environment (ver dev-access.yaml). El environment
+    # define la variable AWS_DEPLOY_ROLE_ARN y las ramas que pueden desplegar: la rama elegida en
+    # "Use workflow from" debe estar permitida ahi, por eso no hay un input de rama aparte
+    environment:
+      name: ${{ inputs.environment || 'dev' }}
+      url: ${{ steps.stack.outputs.web_url }}
+    concurrency:
+      group: deploy-${{ inputs.environment || 'dev' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
 
-#       - name: Typecheck
-#         run: npm run check
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
 
-#       - name: Test
-#         run: npm test
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
 
-#       - name: Build
-#         run: npm run build
+      # Python del runtime de la Lambda, para empaquetarla con uv (lib/python-bundling.ts)
+      - run: uv python install 3.14
+      - run: npm ci
 
-#       - name: Configure AWS credentials
-#         uses: aws-actions/configure-aws-credentials@v4
-#         with:
-#           # Select role-to-assume based on dispatched environment (expects secrets:
-#           # AWS_ROLE_TO_ASSUME_DEV, AWS_ROLE_TO_ASSUME_QA, AWS_ROLE_TO_ASSUME_PROD)
-#           role-to-assume: ${{ github.event.inputs.environment == 'dev' && secrets.AWS_ROLE_TO_ASSUME_DEV || github.event.inputs.environment == 'qa' && secrets.AWS_ROLE_TO_ASSUME_QA || secrets.AWS_ROLE_TO_ASSUME_PROD }}
-#           aws-region: ${{ env.AWS_REGION }}
+      # Credenciales temporales por OIDC: sin llaves de acceso en los secretos del repositorio
+      - name: Credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
 
-#       - name: Deploy infrastructure
-#         run: |
-#           aws cloudformation deploy \
-#             --stack-name "$STACK_NAME" \
-#             --template-file infra/cloudformation/static-site.yaml \
-#               --parameter-overrides ProjectName="$PROJECT_NAME" \
-#             --capabilities CAPABILITY_NAMED_IAM \
-#             --region "$AWS_REGION"
+      - name: Desplegar los stacks con CDK
+        working-directory: infra/cdk
+        run: npx cdk deploy --all -c stage=$STAGE --require-approval never --outputs-file cdk-outputs.json
 
-#       - name: Read CloudFormation outputs
-#         id: cfn
-#         run: |
-#           BUCKET_NAME=$(aws cloudformation describe-stacks \
-#             --stack-name "$STACK_NAME" \
-#             --region "$AWS_REGION" \
-#             --query "Stacks[0].Outputs[?OutputKey=='WebsiteBucketName'].OutputValue" \
-#             --output text)
+      - name: Leer las salidas de los stacks
+        id: stack
+        working-directory: infra/cdk
+        run: |
+          output() { jq -er --arg stack "$1" --arg key "$2" '.[$stack][$key]' cdk-outputs.json; }
+          {
+            echo "api_url=$(output "Votacion-$STAGE-Api" ApiUrl)"
+            echo "bucket=$(output "Votacion-$STAGE-Web" WebBucketName)"
+            echo "distribution_id=$(output "Votacion-$STAGE-Web" DistributionId)"
+            echo "web_url=$(output "Votacion-$STAGE-Web" WebUrl)"
+          } >> "$GITHUB_OUTPUT"
 
-#           DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
-#             --stack-name "$STACK_NAME" \
-#             --region "$AWS_REGION" \
-#             --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
-#             --output text)
+      - name: Compilar el front
+        run: npm run build -w @votacion/web
+        env:
+          VITE_API_URL: ${{ steps.stack.outputs.api_url }}
 
-#           DOMAIN_NAME=$(aws cloudformation describe-stacks \
-#             --stack-name "$STACK_NAME" \
-#             --region "$AWS_REGION" \
-#             --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
-#             --output text)
+      # Primero los assets con hash (cache larga), luego index.html y el resto (sin cache) y al
+      # final se borran los assets viejos, para no romper a quien tenga cargada la version anterior
+      - name: Subir el front a S3
+        env:
+          BUCKET: ${{ steps.stack.outputs.bucket }}
+        run: |
+          aws s3 sync apps/web/dist/assets "s3://$BUCKET/assets" --cache-control "public,max-age=31536000,immutable"
+          aws s3 sync apps/web/dist "s3://$BUCKET" --delete --exclude "assets/*" --cache-control "no-cache"
+          aws s3 sync apps/web/dist/assets "s3://$BUCKET/assets" --delete --cache-control "public,max-age=31536000,immutable"
 
-#           echo "bucket_name=$BUCKET_NAME" >> "$GITHUB_OUTPUT"
-#           echo "distribution_id=$DISTRIBUTION_ID" >> "$GITHUB_OUTPUT"
-#           echo "domain_name=$DOMAIN_NAME" >> "$GITHUB_OUTPUT"
+      - name: Invalidar CloudFront
+        run: aws cloudfront create-invalidation --distribution-id "${{ steps.stack.outputs.distribution_id }}" --paths "/*"
 
-#       - name: Upload static assets
-#         run: aws s3 sync apps/web/dist/ "s3://${{ steps.cfn.outputs.bucket_name }}" --delete --region "$AWS_REGION"
-
-#       - name: Invalidate CloudFront
-#         run: aws cloudfront create-invalidation --distribution-id "${{ steps.cfn.outputs.distribution_id }}" --paths "/*"
-
-#       - name: Deployment URL
-#         run: echo "https://${{ steps.cfn.outputs.domain_name }}"
+      - name: Resumen
+        run: |
+          {
+            echo "### Despliegue en $STAGE"
+            echo "- Rama: \`$GITHUB_REF_NAME\` (\`${GITHUB_SHA::7}\`), por $GITHUB_EVENT_NAME"
+            echo "- Front: ${{ steps.stack.outputs.web_url }}"
+            echo "- API: ${{ steps.stack.outputs.api_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

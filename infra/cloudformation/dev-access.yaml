@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Acceso de desarrolladores al ambiente de votacion popular mediante IAM Identity Center
-  con permisos minimos: grupo, permission set y asignacion a la cuenta; politica de ejecucion
-  acotada para CloudFormation (cdk bootstrap) y limite de permisos para los roles que crea CDK.
-  La despliega un administrador una vez, antes de cdk bootstrap.
+  Acceso al ambiente de votacion popular con permisos minimos: desarrolladores por IAM
+  Identity Center (grupo, permission set y asignacion) y GitHub Actions por OIDC (rol de
+  despliegue); politica de ejecucion acotada para CloudFormation (cdk bootstrap) y limite de
+  permisos para los roles que crea CDK. La despliega un administrador, antes de cdk bootstrap.
 
 Metadata:
   AWSToolsMetrics:
@@ -11,15 +11,17 @@ Metadata:
   com.aws.cloudformation.Context:
     arch: >-
       Desarrollador (Identity Center, grupo votacion-<stage>-developers) -> permission set ->
-      solo puede asumir los roles de cdk bootstrap. El rol de ejecucion de CloudFormation usa
-      CdkExecutionPolicy en vez de AdministratorAccess, y todo rol que cree CDK debe llevar
-      AppPermissionsBoundary (lo aplica infra/cdk/lib/app.ts).
+      DeployPolicy. GitHub Actions (OIDC, environment <stage>) -> GitHubDeployRole -> DeployPolicy.
+      DeployPolicy solo asume los roles de cdk bootstrap, lee los stacks y sube el front. El
+      rol de ejecucion de CloudFormation usa CdkExecutionPolicy en vez de AdministratorAccess,
+      y todo rol que cree CDK debe llevar AppPermissionsBoundary (lo aplica infra/cdk/lib/app.ts).
     must:
       - Desplegar este stack con credenciales de administrador, no con los roles de CDK.
       - Despues de crearlo, ejecutar cdk bootstrap con --cloudformation-execution-policies apuntando a CdkExecutionPolicy.
       - Los nombres votacion-<stage>-* y Votacion-<stage>-* deben coincidir con infra/cdk (config.ts y los ids de stack).
     ref:
       - README.md (seccion Acceso al ambiente dev)
+      - .github/workflows/deploy-aws.yml
 
 Parameters:
   Stage:
@@ -39,6 +41,11 @@ Parameters:
     Type: String
     Default: hnb659fds
     Description: Qualifier de cdk bootstrap (el valor por defecto de CDK).
+  GitHubRepository:
+    Type: String
+    Default: Aer0Cl/Sistema-de-votacion-popular
+    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    Description: Repositorio (owner/nombre) cuyo workflow puede asumir GitHubDeployRole.
 
 Resources:
   AppPermissionsBoundary:
@@ -153,6 +160,25 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:votacion-${Stage}-*
               - !Sub arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/votacion-${Stage}-*
+          - Sid: BucketDelFront
+            Effect: Allow
+            Action: s3:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::votacion-${Stage}-web-${AWS::AccountId}
+              - !Sub arn:${AWS::Partition}:s3:::votacion-${Stage}-web-${AWS::AccountId}/*
+          # Los ids de distribuciones y OAC son aleatorios, por eso el recurso no lleva el nombre
+          - Sid: CloudFront
+            Effect: Allow
+            Action: cloudfront:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+              - !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:origin-access-control/*
+          # Fn::GetStackOutput (referencias entre stacks de CDK) se resuelve con este rol
+          # https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/intrinsic-function-reference-getstackoutput.html
+          - Sid: ReferenciasEntreStacks
+            Effect: Allow
+            Action: cloudformation:DescribeStacks
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Votacion-${Stage}-*/*
           - Sid: VersionDeBootstrap
             Effect: Allow
             Action: ssm:GetParameters
@@ -197,6 +223,97 @@ Resources:
             Action: iam:DeleteRolePermissionsBoundary
             Resource: "*"
 
+  DeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Permisos para desplegar la aplicacion, compartidos por los desarrolladores (permission
+          set) y GitHub Actions (GitHubDeployRole): asumir los roles de cdk bootstrap, leer las
+          salidas de los stacks, subir el front al bucket e invalidar CloudFront.
+        must:
+          - No agregar permisos de IAM: el despliegue de infraestructura pasa por los roles de CDK.
+    Properties:
+      ManagedPolicyName: !Sub votacion-${Stage}-deploy
+      Description: Desplegar los stacks con CDK y subir el front a S3 y CloudFront
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DesplegarConCdk
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}
+          - Sid: LeerStacksDelProyecto
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Votacion-${Stage}-*/*
+          - Sid: ListarBucketDelFront
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::votacion-${Stage}-web-${AWS::AccountId}
+          - Sid: SubirFront
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::votacion-${Stage}-web-${AWS::AccountId}/*
+          - Sid: InvalidarCloudFront
+            Effect: Allow
+            Action:
+              - cloudfront:CreateInvalidation
+              - cloudfront:GetInvalidation
+            Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          GitHub Actions obtiene credenciales temporales por OIDC, sin llaves de acceso guardadas
+          como secretos del repositorio.
+        must:
+          - Solo puede haber un proveedor por URL en la cuenta; otros proyectos deben reutilizarlo.
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          Rol que asume .github/workflows/deploy-aws.yml para desplegar el stage. Solo lo pueden
+          asumir los jobs del environment de GitHub con el nombre del stage, cuyas reglas de
+          proteccion (ramas permitidas, revisores) se configuran en el repositorio.
+        must:
+          - Mantener la condicion sub restringida al repositorio y al environment; nunca usar comodines.
+          - El nombre va en minusculas para no coincidir con role/Votacion-<stage>-*, que gestiona CDK.
+    Properties:
+      RoleName: !Sub votacion-${Stage}-github-deploy
+      Description: Despliegue del sistema de votacion popular desde GitHub Actions (OIDC)
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Ref DeployPolicy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:environment:${Stage}
+
   DevelopersGroup:
     Type: AWS::IdentityStore::Group
     Metadata:
@@ -211,6 +328,8 @@ Resources:
 
   DeveloperPermissionSet:
     Type: AWS::SSO::PermissionSet
+    # CustomerManagedPolicyReferences usa el nombre de la politica, no crea dependencia implicita
+    DependsOn: DeployPolicy
     Metadata:
       com.aws.cloudformation.Context:
         why: >-
@@ -223,17 +342,12 @@ Resources:
       Name: !Sub Votacion-${Stage}-Developer
       Description: Desarrollador del sistema de votacion popular (permisos minimos)
       SessionDuration: PT8H
+      # Despliegue (CDK, S3 y CloudFront): la misma politica que usa GitHub Actions
+      CustomerManagedPolicyReferences:
+        - Name: !Sub votacion-${Stage}-deploy
       InlinePolicy:
         Version: "2012-10-17"
         Statement:
-          - Sid: DesplegarConCdk
-            Effect: Allow
-            Action: sts:AssumeRole
-            Resource:
-              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-${AWS::Region}
-              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-${AWS::Region}
-              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-image-publishing-role-${AWS::AccountId}-${AWS::Region}
-              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-${AWS::Region}
           - Sid: CargaInicial
             Effect: Allow
             Action: dynamodb:PutItem
@@ -271,12 +385,6 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:votacion-${Stage}-*
               - !Sub arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/votacion-${Stage}-*
-          - Sid: LeerStacksDelProyecto
-            Effect: Allow
-            Action:
-              - cloudformation:DescribeStacks
-              - cloudformation:DescribeStackEvents
-            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Votacion-${Stage}-*/*
 
   DevelopersAssignment:
     Type: AWS::SSO::Assignment
@@ -304,3 +412,6 @@ Outputs:
   PermissionSetName:
     Description: Permission set que se elige en aws configure sso
     Value: !Sub Votacion-${Stage}-Developer
+  GitHubDeployRoleArn:
+    Description: Variable AWS_DEPLOY_ROLE_ARN del environment de GitHub
+    Value: !GetAtt GitHubDeployRole.Arn
