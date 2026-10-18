@@ -6,12 +6,12 @@ Los logs registran quien hizo que operacion, nunca el contenido de un voto.
 
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from aws_lambda_powertools import Logger
 
-from .domain.clock import normalize_iso, to_iso
+from .domain.clock import normalize_iso, parse_iso, to_iso
 from .domain.rules import (
     VOTING_METHODS,
     election_status,
@@ -22,6 +22,8 @@ from .domain.rules import (
     validate_answer_choice,
     validate_category_name,
     validate_new_election,
+    validate_new_nominees,
+    validate_new_user,
     validate_nominee_name,
 )
 from .errors import ApiError
@@ -32,6 +34,7 @@ logger = Logger(child=True)
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 8
 CATALOG_ADMIN_MESSAGE = "Solo los administradores gestionan el catalogo."
+USERS_ADMIN_MESSAGE = "Solo los administradores pueden crear usuarios."
 
 
 def _public_nominee(nominee: Item) -> Item:
@@ -173,6 +176,34 @@ class VotingService:
 
     def list_users(self) -> list[Item]:
         return sorted(self.repo.list_users(), key=lambda u: u["id"])
+
+    def create_user(self, admin_id: str, data: Item) -> Item:
+        """Alta de votante o administrador hasta integrar Cognito (luego el id sera el sub)."""
+        self._require_admin(admin_id, USERS_ADMIN_MESSAGE)
+        error = validate_new_user(data)
+        if error:
+            raise ApiError(400, error)
+
+        user = {"displayName": data["displayName"].strip(), "role": data["role"]}
+        if data.get("id") is not None:
+            user["id"] = data["id"]
+            if not self.repo.create_user(user):
+                raise ApiError(409, "Ya existe un usuario con ese id.")
+        else:
+            taken = {u["id"] for u in self.repo.list_users()}
+            for _ in range(5):
+                user["id"] = slug_id(f"u-{user['displayName']}", taken)
+                if self.repo.create_user(user):
+                    break
+                taken.add(user["id"])  # otro administrador lo creo al mismo tiempo
+            else:
+                raise ApiError(503, "No se pudo generar un id unico; intenta de nuevo.")
+
+        logger.info(
+            "Usuario creado",
+            extra={"action": "user.created", "createdUserId": user["id"], "role": user["role"]},
+        )
+        return user
 
     # --- votaciones -----------------------------------------------------------------
 
@@ -371,7 +402,48 @@ class VotingService:
         elections = self.repo.list_elections()
         return [self._catalog_entry(c["id"], elections) for c in self.repo.list_categories()]
 
+    def _new_nominees(self, category_id: str, items: list[Item]) -> list[Item]:
+        """Valida el lote completo y arma los registros; no escribe nada."""
+        nominees = self.repo.list_nominees()
+        error = validate_new_nominees(category_id, items, nominees)
+        if error:
+            raise ApiError(400, error)
+        taken = {n["id"] for n in nominees}
+        # Los nominados se ordenan por createdAt (GSI byCategory): cada uno nuevo va un
+        # milisegundo despues del anterior, y el primero despues del ultimo de la categoria
+        start = self.now()
+        existing = [parse_iso(n["createdAt"]) for n in nominees if n["categoryId"] == category_id]
+        if existing:
+            start = max(start, max(existing) + timedelta(milliseconds=1))
+        records = []
+        for position, item in enumerate(items):
+            nominee_id = slug_id(f"{category_id}-{item['name']}", taken)
+            taken.add(nominee_id)
+            records.append(
+                {
+                    "id": nominee_id,
+                    "categoryId": category_id,
+                    **_clean_nominee(item),
+                    "createdAt": to_iso(start + timedelta(milliseconds=position)),
+                }
+            )
+        return records
+
+    def _save_nominees(self, category_id: str, records: list[Item]) -> None:
+        for record in records:
+            self.repo.put_nominee(record)
+        if records:
+            logger.info(
+                "Nominados agregados",
+                extra={
+                    "action": "nominee.created",
+                    "categoryId": category_id,
+                    "nomineeIds": [r["id"] for r in records],
+                },
+            )
+
     def create_category(self, user_id: str, data: Item) -> Item:
+        """Crea la categoria y, si vienen, sus nominados (data["nominees"], opcional)."""
         self._require_admin(user_id, CATALOG_ADMIN_MESSAGE)
         catalog = self.repo.list_categories()
         error = validate_category_name(data["name"], catalog)
@@ -380,12 +452,20 @@ class VotingService:
         if data["votingMethod"] not in VOTING_METHODS:
             raise ApiError(400, "El metodo de votacion no es valido.")
         category_id = slug_id(data["name"], {c["id"] for c in catalog})
+        # Se valida todo antes de escribir, para no dejar una categoria a medias
+        records = self._new_nominees(category_id, data.get("nominees") or [])
         self.repo.put_category(
             {"id": category_id, "name": data["name"].strip(), "votingMethod": data["votingMethod"]}
         )
         logger.info(
-            "Categoria creada", extra={"action": "category.created", "categoryId": category_id}
+            "Categoria creada",
+            extra={
+                "action": "category.created",
+                "categoryId": category_id,
+                "nominees": len(records),
+            },
         )
+        self._save_nominees(category_id, records)
         return self._catalog_entry(category_id)
 
     def update_category(self, user_id: str, category_id: str, data: Item) -> Item:
@@ -416,26 +496,16 @@ class VotingService:
         )
 
     def add_nominee(self, user_id: str, category_id: str, data: Item) -> Item:
+        return self.add_nominees(user_id, category_id, [data])
+
+    def add_nominees(self, user_id: str, category_id: str, items: list[Item]) -> Item:
+        """Asigna uno o varios nominados nuevos a una categoria; todos o ninguno."""
         self._require_admin(user_id, CATALOG_ADMIN_MESSAGE)
         self._find_category(category_id)
         self._require_unlocked(category_id, "agregar nominados")
-        nominees = self.repo.list_nominees()
-        error = validate_nominee_name(data["name"], category_id, nominees)
-        if error:
-            raise ApiError(400, error)
-        nominee_id = slug_id(f"{category_id}-{data['name']}", {n["id"] for n in nominees})
-        self.repo.put_nominee(
-            {
-                "id": nominee_id,
-                "categoryId": category_id,
-                **_clean_nominee(data),
-                "createdAt": to_iso(self.now()),
-            }
-        )
-        logger.info(
-            "Nominado agregado",
-            extra={"action": "nominee.created", "categoryId": category_id, "nomineeId": nominee_id},
-        )
+        if not items:
+            raise ApiError(400, "Indica al menos un nominado.")
+        self._save_nominees(category_id, self._new_nominees(category_id, items))
         return self._catalog_entry(category_id)
 
     def update_nominee(self, user_id: str, nominee_id: str, data: Item) -> Item:

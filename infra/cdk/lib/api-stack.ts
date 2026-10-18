@@ -131,7 +131,8 @@ export class ApiStack extends Stack {
       description: 'API HTTP del sistema de votacion popular',
     })
     grantTables(apiFunction, {
-      users: 'read',
+      // alta de usuarios por los administradores (POST /admin/users)
+      users: 'write',
       categories: 'write',
       nominees: 'write',
       elections: 'write',

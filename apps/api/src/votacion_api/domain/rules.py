@@ -19,6 +19,12 @@ MIN_NOMINEES = 2
 # Por ahora los rankings deben ordenar a todos los nominados
 REQUIRE_COMPLETE_RANKING = True
 VOTING_METHODS = ("plurality", "ranked")
+USER_ROLES = ("voter", "admin")
+# Ids propios (u-alice) o el "sub" de Cognito cuando se integre (uuid en minusculas)
+USER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+MAX_DISPLAY_NAME = 60
+# Nominados por solicitud: acota el tiempo de la Lambda (cada uno es una escritura)
+MAX_NOMINEES_PER_REQUEST = 50
 
 
 def normalize_election_code(code: str) -> str:
@@ -189,6 +195,42 @@ def validate_nominee_name(
         for n in nominees
     ):
         return "Ya existe un nominado con ese nombre en la categoria."
+    return None
+
+
+def validate_new_user(data: dict[str, Any]) -> str | None:
+    """displayName obligatorio; role e id opcionales (por defecto voter y un id generado).
+
+    Que el id no exista lo comprueba la escritura condicional del repositorio.
+    """
+    display_name = data["displayName"].strip()
+    if not display_name:
+        return "El usuario necesita un nombre para mostrar."
+    if len(display_name) > MAX_DISPLAY_NAME:
+        return f"El nombre para mostrar admite hasta {MAX_DISPLAY_NAME} caracteres."
+    if data["role"] not in USER_ROLES:
+        return "El rol debe ser voter o admin."
+    user_id = data.get("id")
+    if user_id is not None and not USER_ID_PATTERN.match(user_id):
+        return (
+            "El id debe tener entre 2 y 64 caracteres: minusculas, numeros y guiones, "
+            "sin empezar con guion."
+        )
+    return None
+
+
+def validate_new_nominees(
+    category_id: str, items: list[dict[str, Any]], nominees: list[dict[str, Any]]
+) -> str | None:
+    """Valida un lote de nominados nuevos contra los existentes y entre si."""
+    if len(items) > MAX_NOMINEES_PER_REQUEST:
+        return f"Se pueden agregar hasta {MAX_NOMINEES_PER_REQUEST} nominados por solicitud."
+    accepted = list(nominees)
+    for position, item in enumerate(items):
+        error = validate_nominee_name(item["name"], category_id, accepted)
+        if error:
+            return f"Nominado {position + 1}: {error}"
+        accepted.append({"id": f"nuevo-{position}", "categoryId": category_id, **item})
     return None
 
 

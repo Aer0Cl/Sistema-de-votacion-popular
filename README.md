@@ -194,6 +194,58 @@ termine.
 > API es publica y cualquiera con la URL puede actuar como cualquier usuario. Usar solo datos de
 > prueba.
 
+## API (`<ApiUrl>` = `.../api/v1`)
+
+Todas las rutas usan JSON e identifican al usuario con `X-User-Id` en dev. Los errores responden
+`{"message": "..."}` con 400 (datos invalidos), 401 (usuario desconocido), 403 (sin permiso),
+404 (no existe) o 409 (conflicto).
+
+| Metodo y ruta                                                                                      | Quien                 | Para que                                            |
+| -------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------- |
+| `GET /health`                                                                                      | Cualquiera            | Estado de la API                                    |
+| `GET /dev/users`                                                                                   | Cualquiera (solo dev) | Usuarios para el selector del front                 |
+| `GET /me`, `GET /me/elections`, `GET /me/answers`                                                  | Usuario               | Perfil, votaciones y respuestas propias             |
+| `PUT /me/answers/{categoryId}`                                                                     | Usuario               | Guardar respuesta (`nomineeId` o `ranking`)         |
+| `GET /elections/{code}/preview`, `POST .../join`, `DELETE .../membership`, `GET /elections/{code}` | Usuario               | Ver, unirse, abandonar y votar                      |
+| `POST /elections`, `GET /elections/{code}/results`                                                 | Admin                 | Crear votacion; resultados (admins de la votacion)  |
+| `POST /admin/users`                                                                                | Admin                 | Alta de usuario o administrador                     |
+| `GET /admin/catalog`                                                                               | Admin                 | Catalogo con nominados y uso en votaciones          |
+| `POST /admin/categories`                                                                           | Admin                 | Crear categoria, con o sin nominados                |
+| `PATCH`, `DELETE /admin/categories/{categoryId}`                                                   | Admin                 | Editar o eliminar categoria (sin uso en votaciones) |
+| `POST /admin/categories/{categoryId}/nominees`                                                     | Admin                 | Asignar uno o varios nominados a una categoria      |
+| `PATCH /admin/nominees/{nomineeId}`                                                                | Admin                 | Editar nominado (no se eliminan)                    |
+
+**Alta de usuarios** (solo `displayName` es obligatorio; `role` es `voter` por defecto y el `id`
+se genera desde el nombre si no se envia, p. ej. `u-eva-diaz`). Responde 201 con el usuario y 409
+si el `id` ya existe:
+
+```bash
+curl -X POST <ApiUrl>/admin/users -H "x-user-id: u-alice" -H "content-type: application/json" \
+  -d '{"displayName": "Eva Diaz"}'
+curl -X POST <ApiUrl>/admin/users -H "x-user-id: u-alice" -H "content-type: application/json" \
+  -d '{"displayName": "Fede", "role": "admin", "id": "u-fede"}'
+```
+
+**Categoria con o sin nominados** (`votingMethod`: `plurality` o `ranked`; `nominees` es
+opcional y cada uno lleva `name` y `description` opcional):
+
+```bash
+curl -X POST <ApiUrl>/admin/categories -H "x-user-id: u-alice" -H "content-type: application/json" \
+  -d '{"name": "Mejor sonido", "votingMethod": "plurality", "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}]}'
+```
+
+**Asignar nominados a una categoria** (varios con `nominees`, o uno con `name` y `description`):
+
+```bash
+curl -X POST <ApiUrl>/admin/categories/mejor-sonido/nominees -H "x-user-id: u-alice" \
+  -H "content-type: application/json" -d '{"nominees": [{"name": "Barbie"}, {"name": "Maestro"}]}'
+```
+
+Ambas responden 201 con la categoria y todos sus nominados en orden. Hasta 50 nominados por
+solicitud; si uno no es valido (sin nombre o repetido en la categoria) no se guarda ninguno. No
+se pueden agregar nominados a una categoria que ya se usa en una votacion (409). Una votacion
+exige al menos 2 nominados por categoria.
+
 ## Pendiente
 
 - Primer despliegue y prueba de punta a punta.

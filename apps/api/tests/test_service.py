@@ -214,6 +214,58 @@ class TestCatalogo:
         assert status_of(bad_method) == 400
         assert status_of(lambda: service.update_nominee("admin", "a2", {"name": "A1"})) == 400
 
+    def test_crear_categoria_con_nominados(self, service):
+        created = service.create_category(
+            "admin",
+            {
+                "name": "Mejor sonido",
+                "votingMethod": "plurality",
+                "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}],
+            },
+        )
+        assert created["id"] == "mejor-sonido"
+        assert [n["name"] for n in created["nominees"]] == ["Dune", "Oppenheimer"]
+        assert created["nominees"][0]["description"] == "2021"
+        assert [n["id"] for n in created["nominees"]] == [
+            "mejor-sonido-dune",
+            "mejor-sonido-oppenheimer",
+        ]
+
+    def test_nominados_invalidos_no_crean_la_categoria(self, service):
+        repeated = lambda: service.create_category(  # noqa: E731
+            "admin",
+            {
+                "name": "Mejor sonido",
+                "votingMethod": "plurality",
+                "nominees": [{"name": "Dune"}, {"name": " dune "}],
+            },
+        )
+        assert status_of(repeated) == 400
+        assert service.repo.get_category("mejor-sonido") is None
+        assert service.repo.list_nominees("mejor-sonido") == []
+
+    def test_asignar_varios_nominados(self, service):
+        service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "ranked"})
+        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
+        updated = service.add_nominees(
+            "admin", "mejor-sonido", [{"name": "Oppenheimer"}, {"name": "Barbie"}]
+        )
+        assert [n["name"] for n in updated["nominees"]] == ["Dune", "Oppenheimer", "Barbie"]
+
+    def test_asignar_nominados_es_todo_o_nada(self, service):
+        service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "plurality"})
+        service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
+        batch = [{"name": "Barbie"}, {"name": "DUNE"}]
+        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", batch)) == 400
+        assert [n["name"] for n in service.repo.list_nominees("mejor-sonido")] == ["Dune"]
+
+        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", [])) == 400
+        too_many = [{"name": f"N{i}"} for i in range(51)]
+        assert status_of(lambda: service.add_nominees("admin", "mejor-sonido", too_many)) == 400
+        assert status_of(lambda: service.add_nominees("admin", "actor", [{"name": "a3"}])) == 409
+        assert status_of(lambda: service.add_nominees("ana", "mejor-sonido", batch)) == 403
+        assert status_of(lambda: service.add_nominees("admin", "nada", [{"name": "x"}])) == 404
+
     def test_votacion_exige_dos_nominados(self, service):
         service.create_category("admin", {"name": "Mejor sonido", "votingMethod": "plurality"})
         service.add_nominee("admin", "mejor-sonido", {"name": "Dune"})
@@ -223,3 +275,44 @@ class TestCatalogo:
             "categoryIds": ["actor", "mejor-sonido"],
         }
         assert status_of(lambda: service.create_election("admin", data)) == 400
+
+
+class TestUsuarios:
+    def test_crea_votante_con_datos_minimos(self, service):
+        user = service.create_user("admin", {"displayName": " Carla Diaz ", "role": "voter"})
+        assert user == {"id": "u-carla-diaz", "displayName": "Carla Diaz", "role": "voter"}
+        assert service.get_me("u-carla-diaz") == user
+
+    def test_crea_administrador_que_puede_gestionar(self, service):
+        service.create_user("admin", {"displayName": "Diego", "role": "admin", "id": "diego"})
+        assert service.list_catalog("diego")
+
+    def test_id_generado_no_choca(self, service):
+        first = service.create_user("admin", {"displayName": "Ana", "role": "voter"})
+        second = service.create_user("admin", {"displayName": "Ana", "role": "voter"})
+        assert (first["id"], second["id"]) == ("u-ana", "u-ana-2")
+
+    def test_id_repetido(self, service):
+        repeated = lambda: service.create_user(  # noqa: E731
+            "admin", {"displayName": "Otra Ana", "role": "voter", "id": "ana"}
+        )
+        assert status_of(repeated) == 409
+        assert service.get_me("ana")["displayName"] == "Ana"
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"displayName": "  ", "role": "voter"},
+            {"displayName": "x" * 61, "role": "voter"},
+            {"displayName": "Eva", "role": "superadmin"},
+            {"displayName": "Eva", "role": "voter", "id": "Eva Lopez"},
+            {"displayName": "Eva", "role": "voter", "id": "-eva"},
+        ],
+    )
+    def test_datos_invalidos(self, service, data):
+        assert status_of(lambda: service.create_user("admin", data)) == 400
+
+    def test_solo_admins(self, service):
+        data = {"displayName": "Eva", "role": "admin"}
+        assert status_of(lambda: service.create_user("ana", data)) == 403
+        assert status_of(lambda: service.create_user("", data)) == 401

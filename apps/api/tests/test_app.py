@@ -120,3 +120,77 @@ def test_usuarios_de_prueba_solo_en_modo_dev(call, monkeypatch):
 
 def test_ruta_inexistente(call):
     assert call("GET", "/api/v1/nada")[0] == 404
+
+
+def test_alta_de_usuarios(call):
+    status, user = call("POST", "/api/v1/admin/users", user="admin", body={"displayName": "Eva"})
+    assert (status, user) == (201, {"id": "u-eva", "displayName": "Eva", "role": "voter"})
+    assert call("GET", "/api/v1/me", user="u-eva")[1]["displayName"] == "Eva"
+
+    status, admin = call(
+        "POST",
+        "/api/v1/admin/users",
+        user="admin",
+        body={"displayName": "Fede", "role": "admin", "id": "fede"},
+    )
+    assert status == 201
+    assert admin["role"] == "admin"
+
+    assert call("POST", "/api/v1/admin/users", user="admin", body={"id": "x"})[0] == 400
+    assert call("POST", "/api/v1/admin/users", user="admin", body={"displayName": 3})[0] == 400
+    repeated = {"displayName": "Ana", "id": "ana"}
+    assert call("POST", "/api/v1/admin/users", user="admin", body=repeated)[0] == 409
+    assert call("POST", "/api/v1/admin/users", user="ana", body={"displayName": "X"})[0] == 403
+
+
+def test_categoria_con_nominados_y_asignacion(call):
+    status, created = call(
+        "POST",
+        "/api/v1/admin/categories",
+        user="admin",
+        body={
+            "name": "Mejor sonido",
+            "votingMethod": "plurality",
+            "nominees": [{"name": "Dune", "description": "2021"}, {"name": "Oppenheimer"}],
+        },
+    )
+    assert status == 201
+    assert [n["name"] for n in created["nominees"]] == ["Dune", "Oppenheimer"]
+
+    status, updated = call(
+        "POST",
+        "/api/v1/admin/categories/mejor-sonido/nominees",
+        user="admin",
+        body={"nominees": [{"name": "Barbie"}, {"name": "Maestro", "description": "2023"}]},
+    )
+    assert status == 201
+    assert [n["name"] for n in updated["nominees"]] == ["Dune", "Oppenheimer", "Barbie", "Maestro"]
+
+    # La forma de un solo nominado sigue funcionando (la usa el front)
+    status, single = call(
+        "POST",
+        "/api/v1/admin/categories/mejor-sonido/nominees",
+        user="admin",
+        body={"name": "Elvis"},
+    )
+    assert status == 201
+    assert single["nominees"][-1]["name"] == "Elvis"
+
+
+def test_validacion_de_listas_de_nominados(call):
+    path = "/api/v1/admin/categories/mejor-sonido/nominees"
+    base = {"name": "Mejor sonido", "votingMethod": "plurality"}
+    assert (
+        call("POST", "/api/v1/admin/categories", user="admin", body={**base, "nominees": "Dune"})[0]
+        == 400
+    )
+    assert (
+        call("POST", "/api/v1/admin/categories", user="admin", body={**base, "nominees": [{}]})[0]
+        == 400
+    )
+    assert (
+        call("POST", "/api/v1/admin/categories", user="admin", body={**base, "nominees": []})[0]
+        == 201
+    )
+    assert call("POST", path, user="admin", body={"nominees": ["Dune"]})[0] == 400
+    assert call("POST", path, user="admin", body={"nominees": []})[0] == 400

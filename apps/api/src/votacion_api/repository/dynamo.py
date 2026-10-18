@@ -71,6 +71,14 @@ class DynamoRepository:
     def put_user(self, user: Item) -> None:
         self._tables["users"].put_item(Item=user)
 
+    def create_user(self, user: Item) -> bool:
+        table = self._tables["users"]
+        try:
+            table.put_item(Item=user, ConditionExpression=Attr("id").not_exists())
+        except table.meta.client.exceptions.ConditionalCheckFailedException:
+            return False
+        return True
+
     # Catalogo ------------------------------------------------------------------------
 
     def list_categories(self) -> list[Item]:

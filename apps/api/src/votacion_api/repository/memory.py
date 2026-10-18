@@ -26,6 +26,12 @@ class MemoryRepository:
     def put_user(self, user: Item) -> None:
         self.users[user["id"]] = copy.deepcopy(user)
 
+    def create_user(self, user: Item) -> bool:
+        if user["id"] in self.users:
+            return False
+        self.put_user(user)
+        return True
+
     def list_categories(self) -> list[Item]:
         return copy.deepcopy(list(self.categories.values()))
 

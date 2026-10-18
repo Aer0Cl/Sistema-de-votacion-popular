@@ -84,11 +84,32 @@ def _text(body: dict[str, Any], key: str, required: bool = True) -> str:
     return value
 
 
+def _optional_text(body: dict[str, Any], key: str) -> str | None:
+    value = body.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ApiError(400, f"El campo '{key}' debe ser texto.")
+    return value
+
+
 def _text_list(body: dict[str, Any], key: str) -> list[str]:
     value = body.get(key)
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ApiError(400, f"El campo '{key}' debe ser una lista de textos.")
     return value
+
+
+def _nominee(body: dict[str, Any]) -> dict[str, str]:
+    return {"name": _text(body, "name"), "description": _text(body, "description", False)}
+
+
+def _nominee_list(body: dict[str, Any]) -> list[dict[str, str]]:
+    value = body.get("nominees")
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise ApiError(
+            400,
+            "El campo 'nominees' debe ser una lista de objetos con name y description opcional.",
+        )
+    return [_nominee(item) for item in value]
 
 
 # --- errores ----------------------------------------------------------------------------
@@ -125,6 +146,20 @@ def dev_users() -> Response:
     if _auth_mode() != "dev-header":
         raise ApiError(404, "No encontrado.")
     return _json(get_service().list_users())
+
+
+@app.post("/admin/users")
+def create_user() -> Response:
+    # Datos minimos: displayName; role (voter por defecto) e id (generado) son opcionales
+    body = _body()
+    data: dict[str, Any] = {
+        "displayName": _text(body, "displayName"),
+        "role": _optional_text(body, "role") or "voter",
+    }
+    user_id = _optional_text(body, "id")
+    if user_id is not None:
+        data["id"] = user_id
+    return _json(get_service().create_user(_current_user(), data), 201)
 
 
 @app.get("/me")
@@ -190,8 +225,13 @@ def list_catalog() -> Response:
 
 @app.post("/admin/categories")
 def create_category() -> Response:
+    # nominees es opcional: la categoria se puede crear vacia y completarse despues
     body = _body()
-    data = {"name": _text(body, "name"), "votingMethod": _text(body, "votingMethod")}
+    data = {
+        "name": _text(body, "name"),
+        "votingMethod": _text(body, "votingMethod"),
+        "nominees": _nominee_list(body) if "nominees" in body else [],
+    }
     return _json(get_service().create_category(_current_user(), data), 201)
 
 
@@ -209,10 +249,11 @@ def delete_category(category_id: str) -> Response:
 
 
 @app.post("/admin/categories/<category_id>/nominees")
-def add_nominee(category_id: str) -> Response:
+def add_nominees(category_id: str) -> Response:
+    # Varios con {"nominees": [...]}, o uno con {"name", "description"} (lo que usa el front)
     body = _body()
-    data = {"name": _text(body, "name"), "description": _text(body, "description", False)}
-    return _json(get_service().add_nominee(_current_user(), category_id, data), 201)
+    items = _nominee_list(body) if "nominees" in body else [_nominee(body)]
+    return _json(get_service().add_nominees(_current_user(), category_id, items), 201)
 
 
 @app.patch("/admin/nominees/<nominee_id>")
